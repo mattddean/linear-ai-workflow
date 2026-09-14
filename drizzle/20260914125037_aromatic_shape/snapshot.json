@@ -1,0 +1,241 @@
+{
+  "version": "8",
+  "dialect": "postgres",
+  "id": "518e1c7b-b30c-4bfa-a987-4305c782224a",
+  "prevIds": [
+    "00000000-0000-0000-0000-000000000000"
+  ],
+  "ddl": [
+    {
+      "isRlsEnabled": false,
+      "name": "workflow_assignments",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "workflow_runs",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "workflow_worker_owners",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "run_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_assignments"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sequence",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_assignments"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "data",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_assignments"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_runs"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "issue_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_runs"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "data",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_runs"
+    },
+    {
+      "type": "boolean",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "false",
+      "generated": null,
+      "identity": null,
+      "name": "pause_requested",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_runs"
+    },
+    {
+      "type": "boolean",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "false",
+      "generated": null,
+      "identity": null,
+      "name": "resume_requested",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_runs"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "resume_answer",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_runs"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "worker_group",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_worker_owners"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "worker_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "workflow_worker_owners"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "issue_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"data\"->>'status' <> 'approved'",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "workflow_runs_active_issue",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "workflow_runs"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "run_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "workflow_runs",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "workflow_assignments_run_id_workflow_runs_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "workflow_assignments"
+    },
+    {
+      "columns": [
+        "run_id",
+        "sequence"
+      ],
+      "nameExplicit": false,
+      "name": "workflow_assignments_pkey",
+      "entityType": "pks",
+      "schema": "public",
+      "table": "workflow_assignments"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "workflow_runs_pkey",
+      "schema": "public",
+      "table": "workflow_runs",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "worker_group"
+      ],
+      "nameExplicit": false,
+      "name": "workflow_worker_owners_pkey",
+      "schema": "public",
+      "table": "workflow_worker_owners",
+      "entityType": "pks"
+    }
+  ],
+  "renames": []
+}
