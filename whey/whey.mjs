@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '..')
-const configPath = path.join(repoRoot, '.whey.json')
+const configPath = path.join(repoRoot, '.whey.jsonc')
 const hammerspoonBridgePath = path.join(scriptDir, 'hammerspoon.lua')
 
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
@@ -100,12 +100,16 @@ function runHammerspoon(action, payload = {}) {
 
   fs.writeFileSync(payloadFile, JSON.stringify(commandPayload))
 
-  const result = spawnSync(requiredCheckCommand('hammerspoon'), ['-t', String(hammerspoonIpcTimeoutSeconds()), '-c', code], {
-    cwd: repoRoot,
-    env: process.env,
-    stdio: 'pipe',
-    encoding: 'utf8',
-  })
+  const result = spawnSync(
+    requiredCheckCommand('hammerspoon'),
+    ['-t', String(hammerspoonIpcTimeoutSeconds()), '-c', code],
+    {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: 'pipe',
+      encoding: 'utf8',
+    },
+  )
 
   fs.rmSync(payloadFile, { force: true })
 
@@ -1123,7 +1127,13 @@ async function openProjectUrls(project, state, options = {}) {
         }
       }
 
-      run('open', [...openTarget, '--args', ...(profile ? [`--user-data-dir=${profile}`] : []), ...browserArgs, ...targetArgs])
+      run('open', [
+        ...openTarget,
+        '--args',
+        ...(profile ? [`--user-data-dir=${profile}`] : []),
+        ...browserArgs,
+        ...targetArgs,
+      ])
     }
 
     const windows = await waitForAppWindows(before, appName, opener.reuseExisting)

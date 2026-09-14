@@ -107,7 +107,7 @@ removes the Rift snapshot, browser profiles, and Whey state.
 Native Space automation uses Hammerspoon's experimental `hs.spaces` APIs, so
 Mission Control may briefly appear while Spaces are created, opened, or removed.
 Whey gives Hammerspoon IPC calls a longer timeout via `ipcTimeoutSeconds` in
-`../.whey.json` because Space creation and cleanup can take longer than the
+`../.whey.jsonc` because Space creation and cleanup can take longer than the
 `hs` CLI default.
 
 ## State
@@ -124,10 +124,10 @@ Each isolate gets its own app, API, Electric, Postgres, Caddy, and Drizzle
 Studio ports. Existing isolates pick up newly configured ports the next time
 they are opened, stopped, or destroyed.
 
-Only the `.whey` root is configurable via `stateRoot` in `../.whey.json`;
+Only the `.whey` root is configurable via `stateRoot` in `../.whey.jsonc`;
 everything inside that directory is owned by Whey.
 
-Isolate behavior is configured in `../.whey.json`. The orchestrator only updates
+Isolate behavior is configured in `../.whey.jsonc`. The orchestrator only updates
 each project's `.env`, and Caddy and other project files read those values from
 the environment.
 
