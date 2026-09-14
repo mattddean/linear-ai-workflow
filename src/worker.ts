@@ -17,62 +17,67 @@ import { TicketWorkflow, resumeSignal } from './ticket.workflow'
 
 // Keeps a worker group owned by one machine and polls its runs for work and correlated resume requests.
 
-export const pollRuns = Effect.fn('Worker.pollRuns')(function* (group: WorkerGroup) {
+const pollRun = Effect.fn('Worker.pollRun')(function* (run: Run) {
   const store = yield* Store
   const linear = yield* Linear
+  const executionId = yield* TicketWorkflow.executionId({ id: run.id })
+  if ((run.status === 'blocked' || run.status === 'paused') && run.waitSequence !== null) {
+    const command = yield* controls(run.id)
+    let answer = command.resume_answer
+    if (!command.resume_requested && run.status === 'blocked' && run.predecessorId !== null) {
+      const snapshot = yield* linear.read(run.issueId)
+      const publication = snapshot.comments.find((comment) => comment.id === run.predecessorId)
+      if (publication) {
+        const response = humanAnswer({ run, comments: snapshot.comments, publication })
+        if (response) answer = response.body.split('\n').slice(1).join('\n').trim()
+      }
+    }
+    if (command.resume_requested || (answer !== null && answer.length > 0)) {
+      yield* recoverAgentLease()
+      const scopeChanged = answer?.startsWith('SCOPE:') ?? false
+      const resumed: Run = {
+        ...run,
+        status: 'queued',
+        answer,
+        question: null,
+        phase: scopeChanged ? 'refinement' : run.phase,
+        refinementCommentId: scopeChanged ? null : run.refinementCommentId,
+        note: `${run.note}\n\nHuman response: ${answer ?? 'Explicit CLI resume; reconcile prior work before continuing.'}`,
+      }
+      // Keep waitSequence until the signal has been confirmed, so a restart can repeat delivery.
+      yield* store.save(resumed)
+      yield* store.acknowledge(run.id)
+      yield* DurableDeferred.succeed(resumeSignal(run.waitSequence), {
+        value: undefined,
+        token: DurableDeferred.tokenFromExecutionId(resumeSignal(run.waitSequence), {
+          workflow: TicketWorkflow,
+          executionId,
+        }),
+      })
+    }
+  } else {
+    if (run.waitSequence !== null) yield* store.acknowledge(run.id)
+    yield* TicketWorkflow.execute({ id: run.id }, { discard: true })
+    if (run.waitSequence !== null)
+      yield* DurableDeferred.succeed(resumeSignal(run.waitSequence), {
+        value: undefined,
+        token: DurableDeferred.tokenFromExecutionId(resumeSignal(run.waitSequence), {
+          workflow: TicketWorkflow,
+          executionId,
+        }),
+      })
+  }
+})
+
+export const pollRuns = Effect.fn('Worker.pollRuns')(function* (group: WorkerGroup) {
+  const store = yield* Store
   const settings = yield* Settings
   const runs = yield* store.list
-  for (const run of runs.filter(
-    (run) => run.workerGroup === group && run.workerId === settings.workerId && run.status !== 'approved',
-  )) {
-    const executionId = yield* TicketWorkflow.executionId({ id: run.id })
-    if ((run.status === 'blocked' || run.status === 'paused') && run.waitSequence !== null) {
-      const command = yield* controls(run.id)
-      let answer = command.resume_answer
-      if (!command.resume_requested && run.status === 'blocked' && run.predecessorId !== null) {
-        const snapshot = yield* linear.read(run.issueId)
-        const publication = snapshot.comments.find((comment) => comment.id === run.predecessorId)
-        if (publication) {
-          const response = humanAnswer({ run, comments: snapshot.comments, publication })
-          if (response) answer = response.body.split('\n').slice(1).join('\n').trim()
-        }
-      }
-      if (command.resume_requested || (answer !== null && answer.length > 0)) {
-        yield* recoverAgentLease()
-        const scopeChanged = answer?.startsWith('SCOPE:') ?? false
-        const resumed: Run = {
-          ...run,
-          status: 'queued',
-          answer,
-          question: null,
-          phase: scopeChanged ? 'refinement' : run.phase,
-          refinementCommentId: scopeChanged ? null : run.refinementCommentId,
-          note: `${run.note}\n\nHuman response: ${answer ?? 'Explicit CLI resume; reconcile prior work before continuing.'}`,
-        }
-        // Keep waitSequence until the signal has been confirmed, so a restart can repeat delivery.
-        yield* store.save(resumed)
-        yield* store.acknowledge(run.id)
-        yield* DurableDeferred.succeed(resumeSignal(run.waitSequence), {
-          value: undefined,
-          token: DurableDeferred.tokenFromExecutionId(resumeSignal(run.waitSequence), {
-            workflow: TicketWorkflow,
-            executionId,
-          }),
-        })
-      }
-    } else {
-      if (run.waitSequence !== null) yield* store.acknowledge(run.id)
-      yield* TicketWorkflow.execute({ id: run.id }, { discard: true })
-      if (run.waitSequence !== null)
-        yield* DurableDeferred.succeed(resumeSignal(run.waitSequence), {
-          value: undefined,
-          token: DurableDeferred.tokenFromExecutionId(resumeSignal(run.waitSequence), {
-            workflow: TicketWorkflow,
-            executionId,
-          }),
-        })
-    }
-  }
+  yield* Effect.forEach(
+    runs.filter((run) => run.workerGroup === group && run.workerId === settings.workerId && run.status !== 'approved'),
+    (run) => pollRun(run).pipe(Effect.catchAll((failure) => Effect.logError(`Run ${run.id}`, failure))),
+    { discard: true },
+  )
 })
 
 export const pollingLayer = (group: WorkerGroup) =>
@@ -100,23 +105,37 @@ export const acquireWorkerLock = Effect.fn('Worker.acquireLock')(function* (grou
     connection.executeValues('SELECT pg_advisory_unlock(hashtext($1))', [key]).pipe(Effect.ignore),
   )
   const db = yield* Db
-  const foreign = yield* db
-    .select({ id: workflow_runs.id })
-    .from(workflow_runs)
-    .where(
-      and(
-        expression`${workflow_runs.data}->>'worker_group' = ${group}`,
-        expression`${workflow_runs.data}->>'worker_id' <> ${settings.workerId}`,
-        expression`${workflow_runs.data}->>'status' <> 'approved'`,
-      ),
-    )
-    .limit(1)
-  if (foreign.length > 0)
-    return yield* error('blocked', `Group ${group} has unfinished runs on another machine; start its owning worker`)
-  yield* db
-    .insert(workflow_worker_owners)
-    .values({ worker_group: group, worker_id: settings.workerId })
-    .onConflictDoUpdate({ target: workflow_worker_owners.worker_group, set: { worker_id: settings.workerId } })
+  yield* db.transaction((tx) =>
+    Effect.gen(function* () {
+      yield* tx
+        .insert(workflow_worker_owners)
+        .values({ worker_group: group, worker_id: settings.workerId })
+        .onConflictDoNothing()
+      // Lock the same ownership row as discovery before checking or changing its machine.
+      yield* tx
+        .select()
+        .from(workflow_worker_owners)
+        .where(eq(workflow_worker_owners.worker_group, group))
+        .for('update')
+      const foreign = yield* tx
+        .select({ id: workflow_runs.id })
+        .from(workflow_runs)
+        .where(
+          and(
+            expression`${workflow_runs.data}->>'worker_group' = ${group}`,
+            expression`${workflow_runs.data}->>'worker_id' <> ${settings.workerId}`,
+            expression`${workflow_runs.data}->>'status' <> 'approved'`,
+          ),
+        )
+        .limit(1)
+      if (foreign.length > 0)
+        return yield* error('blocked', `Group ${group} has unfinished runs on another machine; start its owning worker`)
+      yield* tx
+        .update(workflow_worker_owners)
+        .set({ worker_id: settings.workerId })
+        .where(eq(workflow_worker_owners.worker_group, group))
+    }),
+  )
   yield* Effect.logInfo(`Worker ${settings.workerId} holds group ${group}`)
   // Loss of the lock connection terminates the worker scope and its child processes.
   return connection.executeValues('SELECT 1', []).pipe(Effect.repeat(Schedule.spaced('2 seconds')))

@@ -1,18 +1,19 @@
 import { and, asc, eq, sql } from 'drizzle-orm'
 import { Context, Effect, Layer, Schema } from 'effect'
 
-import type { AppError, RunId, Journal, Run } from './domain'
+import type { RunId, Journal, Run } from './domain'
 
 import { RunData, JournalData } from './boundary-schemas'
 import { Db } from './db/live'
-import { workflow_runs, workflow_assignments } from './db/schema'
-import { error } from './domain'
+import { workflow_runs, workflow_assignments, workflow_worker_owners } from './db/schema'
+import { AppError, error } from './domain'
 
 // Persists runs, assignment journals, and operator controls through Drizzle, committing completed handoffs atomically.
 
 export class Store extends Context.Tag('Store')<
   Store,
   {
+    readonly enroll: (run: Run) => Effect.Effect<boolean, AppError>
     readonly create: (run: Run) => Effect.Effect<void, AppError>
     readonly get: (id: RunId) => Effect.Effect<Run, AppError>
     readonly list: Effect.Effect<readonly Run[], AppError>
@@ -63,6 +64,38 @@ export const StoreLive = Layer.effect(
         .pipe(Effect.asVoid, Effect.mapError(storageError)),
     )
     return Store.of({
+      enroll: Effect.fn('Store.enroll')((run) =>
+        db
+          .transaction((tx) =>
+            Effect.gen(function* () {
+              // All discovery processes serialize on the issue, including when its prior run is already approved.
+              yield* tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${run.issueId}))`)
+              const existing = yield* tx
+                .select({ id: workflow_runs.id })
+                .from(workflow_runs)
+                .where(eq(workflow_runs.issue_id, run.issueId))
+                .limit(1)
+              if (existing.length > 0) return false
+              // Reserve ownership before a worker exists, and serialize enrollment with worker ownership changes.
+              yield* tx
+                .insert(workflow_worker_owners)
+                .values({ worker_group: run.workerGroup, worker_id: run.workerId })
+                .onConflictDoNothing()
+              const owners = yield* tx
+                .select()
+                .from(workflow_worker_owners)
+                .where(eq(workflow_worker_owners.worker_group, run.workerGroup))
+                .for('update')
+              if (owners[0] && owners[0].worker_id !== run.workerId)
+                return yield* error('blocked', 'Discovery must run on the machine owning its worker group')
+              yield* tx
+                .insert(workflow_runs)
+                .values({ id: run.id, issue_id: run.issueId, data: Schema.encodeSync(RunData)(run) })
+              return true
+            }),
+          )
+          .pipe(Effect.mapError((failure) => (failure instanceof AppError ? failure : storageError()))),
+      ),
       create: Effect.fn('Store.create')((run) =>
         db
           .insert(workflow_runs)

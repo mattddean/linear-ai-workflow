@@ -1,12 +1,11 @@
-import type { Redacted } from 'effect'
+import { Context, Layer, Redacted } from 'effect'
 
-import { Config, Context, Layer } from 'effect'
-import { hostname } from 'node:os'
-import { resolve } from 'node:path'
+import type { WorkerGroup } from './domain'
 
-import { Path, TeamId, WorkerId } from './domain'
+import { Path, TeamId, WorkerId, Branch } from './domain'
+import { env } from './env'
 
-// Loads and validates worker configuration, local storage paths, and protected Linear credentials from the environment.
+// Adapts the validated environment into replaceable Effect settings services and redacts the Linear credential.
 
 export class Settings extends Context.Tag('Settings')<
   Settings,
@@ -15,31 +14,34 @@ export class Settings extends Context.Tag('Settings')<
     readonly teamId: typeof TeamId.Type
     readonly worktreeRoot: Path
     readonly artifactRoot: Path
+    readonly workerGroup: WorkerGroup
     readonly workerId: typeof WorkerId.Type
     readonly runnerHost: string
     readonly runnerPort: number
     readonly pollSeconds: number
   }
 >() {}
-export const SettingsLive = Layer.effect(
-  Settings,
-  Config.all({
-    workerId: Config.string('WORKER_ID').pipe(Config.withDefault(hostname()), Config.mapAttempt(WorkerId.make)),
-    runnerHost: Config.string('WORKFLOW_RUNNER_HOST').pipe(Config.withDefault('127.0.0.1')),
-    runnerPort: Config.integer('WORKFLOW_RUNNER_PORT').pipe(Config.withDefault(34541)),
-    linearKey: Config.redacted('LINEAR_API_KEY'),
-    teamId: Config.string('LINEAR_TEAM_ID').pipe(Config.mapAttempt(TeamId.make)),
-    worktreeRoot: Config.string('WORKTREE_ROOT').pipe(
-      Config.withDefault(resolve('.worktrees')),
-      Config.mapAttempt(Path.make),
-    ),
-    artifactRoot: Config.string('ARTIFACT_ROOT').pipe(
-      Config.withDefault(resolve('.artifacts')),
-      Config.mapAttempt(Path.make),
-    ),
-    pollSeconds: Config.integer('POLL_SECONDS').pipe(
-      Config.withDefault(30),
-      Config.validate({ message: 'Must be positive', validation: (n) => n > 0 }),
-    ),
-  }),
-)
+export const SettingsLive = Layer.succeed(Settings, {
+  workerGroup: env.WORKFLOW_SHARD_GROUP,
+  workerId: WorkerId.make(env.WORKER_ID),
+  runnerHost: env.WORKFLOW_RUNNER_HOST,
+  runnerPort: env.WORKFLOW_RUNNER_PORT,
+  linearKey: Redacted.make(env.LINEAR_API_KEY),
+  teamId: TeamId.make(env.LINEAR_TEAM_ID),
+  worktreeRoot: Path.make(env.WORKTREE_ROOT),
+  artifactRoot: Path.make(env.ARTIFACT_ROOT),
+  pollSeconds: env.POLL_SECONDS,
+})
+
+export class DiscoverySettings extends Context.Tag('DiscoverySettings')<
+  DiscoverySettings,
+  {
+    readonly repo: Path
+    readonly base: typeof Branch.Type
+  }
+>() {}
+
+export const DiscoverySettingsLive = Layer.succeed(DiscoverySettings, {
+  repo: Path.make(env.REPOSITORY_PATH),
+  base: Branch.make(env.BASE_BRANCH),
+})

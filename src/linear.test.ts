@@ -2,7 +2,7 @@ import { expect, spyOn, test } from 'bun:test'
 import { Effect, Layer, Schema } from 'effect'
 
 import { Settings } from './config'
-import { CommentId } from './domain'
+import { CommentId, IssueId } from './domain'
 import { Linear, LinearLive } from './linear'
 import { fixture, settings, userId } from './test/fixtures'
 
@@ -135,4 +135,56 @@ test('comment creation preserves native Linear request and response properties',
   )
   expect(result).toEqual(comment)
   expect(published).toBe(true)
+})
+
+test('discovery queries the exact team and label, paginates, and excludes closed or archived issues', async () => {
+  const first = fixture().state.snapshot.issue
+  const second = { ...first, id: IssueId.make(crypto.randomUUID()) }
+  const node = (issue: typeof first, type = 'started', archivedAt: string | null = null) => ({
+    ...issue,
+    archivedAt,
+    state: { type },
+  })
+  let requests = 0
+  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+    fetchImplementation(async (_url, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected JSON request')
+      const request = Schema.decodeUnknownSync(
+        Schema.parseJson(
+          Schema.Struct({
+            query: Schema.String,
+            variables: Schema.Struct({ teamId: Schema.String, after: Schema.NullOr(Schema.String) }),
+          }),
+        ),
+      )(init.body)
+      expect(request.variables.teamId).toBe(settings.teamId)
+      expect(request.query).toContain('team: { id: { eq: $teamId } }')
+      expect(request.query).toContain('labels: { name: { eq: "ai-workflow" } }')
+      expect(request.query).toContain('nin: ["completed", "canceled"]')
+      expect(request.query).toContain('includeArchived: false')
+      expect(request.query).toContain('updatedAt')
+      expect(request.query).not.toContain('updated_at')
+      requests += 1
+      expect(request.variables.after).toBe(requests === 1 ? null : 'next-page')
+      return Response.json({
+        data: {
+          issues: {
+            nodes:
+              requests === 1
+                ? [node(first), node(first, 'completed'), node(first, 'canceled'), node(first, 'started', '2026-01-01')]
+                : [node(second)],
+            pageInfo: { hasNextPage: requests === 1, endCursor: requests === 1 ? 'next-page' : null },
+          },
+        },
+      })
+    }),
+  )
+  const issues = await Effect.runPromise(
+    Effect.flatMap(Linear, (linear) => linear.discover).pipe(
+      Effect.provide(LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))),
+      Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
+    ),
+  )
+  expect(issues.map((issue) => issue.id)).toEqual([first.id, second.id])
+  expect(requests).toBe(2)
 })

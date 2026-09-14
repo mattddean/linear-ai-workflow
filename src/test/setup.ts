@@ -30,6 +30,15 @@ const startDatabase = Effect.fn('Test.startDatabase')(function* () {
     DATABASE_URL: container.getConnectionUri(),
     LINEAR_API_KEY: 'test-only',
     LINEAR_TEAM_ID: '00000000-0000-4000-8000-000000000001',
+    REPOSITORY_PATH: '/tmp/linear-workflow-test-repo',
+    BASE_BRANCH: 'main',
+    WORKFLOW_SHARD_GROUP: 'local',
+    WORKER_ID: 'test-machine',
+    WORKFLOW_RUNNER_HOST: '127.0.0.1',
+    WORKFLOW_RUNNER_PORT: '34542',
+    POLL_SECONDS: '1',
+    WORKTREE_ROOT: '/tmp/worktrees',
+    ARTIFACT_ROOT: '/tmp/artifacts',
   })
   // This repo has source schemas but no checked-in migrations. Push only into this newly owned container.
   const setup = Bun.spawn([process.execPath, 'node_modules/drizzle-kit/bin.cjs', 'push', '--force'], {

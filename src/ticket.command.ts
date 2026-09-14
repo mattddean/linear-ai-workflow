@@ -1,89 +1,16 @@
 import { Args, Command, Options } from '@effect/cli'
 import { Console, Effect, Schema } from 'effect'
-import { resolve } from 'node:path'
-
-import type { Run } from './domain'
 
 import { recoverAgentLease } from './agent'
 import { Settings } from './config'
-import { Branch, IssueKey, Path, RunId, error } from './domain'
-import { fingerprint } from './handoff'
-import { Linear } from './linear'
+import { RunId, error } from './domain'
 import { rootRuntime } from './runtime/layers/root'
 import { Store } from './store'
-import { TicketWorkflow } from './ticket.workflow'
-import { ensureOwner } from './worker'
-import { clientEngineLayer, ensureWorker } from './workflows/workflow-engine'
-import { workflowWorkerOption } from './workflows/workflow-worker-option'
 import { Workspace } from './workspace'
 
-// Defines ticket enrollment, inspection, and operator-control commands against the shared process services.
+// Defines ticket inspection and operator-control commands against the shared process services.
 
 const idArgument = Args.text({ name: 'run-id' })
-const positive = (value: number) => Number.isSafeInteger(value) && value > 0
-
-export const startCommand = Command.make(
-  'start',
-  {
-    issue: Args.text({ name: 'issue' }),
-    repo: Options.directory('repo'),
-    base: Options.text('base'),
-    worker: workflowWorkerOption,
-    maxAttempts: Options.integer('max-attempts').pipe(Options.withDefault(3)),
-    maxTokens: Options.integer('max-tokens').pipe(Options.withDefault(1000000)),
-    maxMinutes: Options.integer('max-minutes').pipe(Options.withDefault(120)),
-  },
-  (input) =>
-    Effect.gen(function* () {
-      if (![input.maxAttempts, input.maxTokens, input.maxMinutes].every(positive))
-        return yield* error('configuration', 'Run limits must be positive integers')
-      const issueKey = yield* Schema.decodeUnknown(IssueKey)(input.issue)
-      const workspace = yield* Workspace
-      const linear = yield* Linear
-      const store = yield* Store
-      const settings = yield* Settings
-      const base = yield* workspace.inspectBase({ repo: Path.make(resolve(input.repo)), base: Branch.make(input.base) })
-      const snapshot = yield* linear.read(issueKey)
-      yield* ensureWorker(input.worker).pipe(Effect.provide(clientEngineLayer(input.worker)))
-      yield* ensureOwner(input.worker)
-      const id = RunId.make(crypto.randomUUID())
-      const run: Run = {
-        id,
-        workerGroup: input.worker,
-        workerId: settings.workerId,
-        issueId: snapshot.issue.id,
-        issueKey: snapshot.issue.identifier,
-        repo: base.repo,
-        baseSha: base.baseSha,
-        branch: Branch.make(`codex/${issueKey.toLowerCase()}-${id}`),
-        worktree: Path.make(resolve(settings.worktreeRoot, id)),
-        commitSha: null,
-        refinementCommentId: null,
-        predecessorId: null,
-        phase: 'refinement',
-        status: 'queued',
-        sequence: 0,
-        attempts: 0,
-        tokens: 0,
-        maxAttempts: input.maxAttempts,
-        maxTokens: input.maxTokens,
-        maxMinutes: input.maxMinutes,
-        activeMillis: 0,
-        note: '',
-        question: null,
-        waitSequence: null,
-        answer: null,
-        issueFingerprint: fingerprint(snapshot),
-        updatedAt: new Date().toISOString(),
-      }
-      yield* store.create(run)
-      yield* TicketWorkflow.execute({ id }, { discard: true }).pipe(Effect.provide(clientEngineLayer(input.worker)))
-      yield* Console.log(
-        `Enrolled ${issueKey}: ${id}\nWorker: ${input.worker} (${settings.workerId})\nWorktree: ${run.worktree}`,
-      )
-    }).pipe(Effect.scoped, Effect.provide(rootRuntime)),
-)
-
 export const statusCommand = Command.make('status', { id: idArgument }, ({ id }) =>
   Effect.gen(function* () {
     const store = yield* Store

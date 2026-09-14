@@ -1,9 +1,16 @@
 import { BunContext } from '@effect/platform-bun'
 import { expect, test } from 'bun:test'
+import { eq } from 'drizzle-orm'
 import { Effect, Exit, Layer, Scope } from 'effect'
 
+import { DiscoverySettings } from '../config'
 import { CoordinatorLive } from '../coordinator'
+import { Db } from '../db/live'
+import { workflow_runs, workflow_assignments } from '../db/schema'
+import { discoverTickets } from '../discovery'
+import { Branch, CommentId, error } from '../domain'
 import { blocked } from '../handoff'
+import { Linear } from '../linear'
 import { Store, StoreLive } from '../store'
 import { TestDatabaseLive } from '../test/db'
 import { fixture, makeRun, ready } from '../test/fixtures'
@@ -77,3 +84,78 @@ test.each([...workerGroups])(
   },
   60000,
 )
+
+test('discovered ticket runs PM to developer to QA to PM despite another ticket poll failing', async () => {
+  const f = fixture()
+  const inaccessible = {
+    ...makeRun(),
+    status: 'blocked' as const,
+    waitSequence: 0,
+    predecessorId: f.state.run.predecessorId,
+  }
+  // A published blocker makes the worker read Linear while checking for a human answer.
+  const stranded = {
+    ...inaccessible,
+    predecessorId: CommentId.make(crypto.randomUUID()),
+    updatedAt: '2000-01-01T00:00:00Z',
+  }
+  const dependencies = f.dependencies.pipe(
+    Layer.provideMerge(StoreLive),
+    Layer.provideMerge(TestDatabaseLive),
+    Layer.provideMerge(BunContext.layer),
+  )
+  const linear = Linear.of({
+    ...f.linear,
+    read: (id) => (id === stranded.issueId ? Effect.fail(error('linear', 'Issue inaccessible')) : f.linear.read(id)),
+  })
+  const worker = TicketWorkflowLive.pipe(
+    Layer.provide(CoordinatorLive),
+    Layer.provideMerge(workerEngineLayer({ group: 'local', host: '127.0.0.1', port: 35673 })),
+  )
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const store = yield* Store
+      const db = yield* Db
+      yield* store.create(stranded)
+      yield* discoverTickets()
+      const queued = (yield* store.list).find((run) => run.issueId === f.state.run.issueId)
+      if (!queued) throw new Error('Expected discovery to enqueue a run')
+      expect(queued.status).toBe('queued')
+      const context = yield* Layer.build(worker)
+      yield* pollRuns('local').pipe(Effect.provide(context))
+      for (;;) {
+        const run = yield* store.get(queued.id)
+        if (run.status === 'approved') break
+        yield* Effect.sleep('100 millis')
+      }
+      const [row] = yield* db.select().from(workflow_runs).where(eq(workflow_runs.id, queued.id))
+      const assignments = yield* db
+        .select()
+        .from(workflow_assignments)
+        .where(eq(workflow_assignments.run_id, queued.id))
+        .orderBy(workflow_assignments.sequence)
+      expect(row?.data.status).toBe('approved')
+      expect(row?.data.commit_sha).toBe(f.state.run.baseSha)
+      expect(assignments.map((assignment) => assignment.data.assignment.run.phase)).toEqual([
+        'refinement',
+        'implementation',
+        'verification',
+        'acceptance',
+      ])
+      expect(
+        assignments.every((assignment) => assignment.data.state === 'done' && assignment.data.comment_id !== null),
+      ).toBe(true)
+      expect(f.state.calls).toBe(4)
+      expect(f.state.posts).toBe(4)
+      yield* discoverTickets()
+      expect((yield* store.list).filter((run) => run.issueId === f.state.run.issueId)).toHaveLength(1)
+      yield* store.save({ ...stranded, status: 'approved' })
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(DiscoverySettings, { repo: f.state.run.repo, base: Branch.make('main') }),
+      Effect.provideService(Linear, linear),
+      Effect.provide(dependencies),
+      Effect.timeout('30 seconds'),
+    ),
+  )
+}, 45000)

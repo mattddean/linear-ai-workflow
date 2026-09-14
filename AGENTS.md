@@ -11,8 +11,8 @@ Linear AI Workflow runs a local PM → Developer → QA → PM development team.
 - Linear comments are the agents' communication channel. Publish and confirm a handoff before its recipient runs; construct the recipient's input from the persisted comment.
 - The database owns durable execution state. Do not reconstruct the entire workflow from comments or introduce a second orchestration engine.
 - Keep code execution, orchestration, and artifacts local. OpenAI performs model inference; Linear stores issue discussion.
-- Use polling. Do not add webhook infrastructure, Linear AI integration, hosted execution, or automatic backlog selection without a requirement.
-- Keep one ticket assignment active per worker. Use Effect Cluster with the same `--worker local` / `--worker default` shard-group routing pattern as junior. Preserve machine ownership of local worktrees; do not implicitly move code or artifacts when a worker changes.
+- Use polling to automatically enroll open tickets labeled `ai-workflow` in the configured team. Run the watcher and worker through Turbo development tasks. Do not add webhooks, Linear AI integration, or hosted execution.
+- Keep one ticket assignment active per worker. Use Effect Cluster with Junior’s local/default shard-group routing, selected by `WORKFLOW_SHARD_GROUP`. Preserve machine ownership of local worktrees; do not implicitly move code or artifacts when a worker changes.
 - PM alone accepts a result after independent QA. Acceptance does not authorize pushing, merging, deployment, or Linear status changes.
 
 ## Code quality
@@ -37,6 +37,7 @@ When in doubt about how to structure any feature, service, database access, or i
 
 Use the local [junior repository](../junior.mtdn.dev/junior.mtdn.dev) as a reference for good Effect practices. Before implementing Effect services, durable workflows, or CLI commands, consult the relevant working examples there:
 
+- [Environment schema](../junior.mtdn.dev/junior.mtdn.dev/apps/express/env.ts): shared `@t3-oss/env-core` configuration with `zod/v4`.
 - [Effect guidance in AGENTS.md](../junior.mtdn.dev/junior.mtdn.dev/AGENTS.md): named operations, service requirements, Layers, and runtime boundaries.
 - [Workflow engine](../junior.mtdn.dev/junior.mtdn.dev/apps/express/workflows/workflow-engine.ts) and [workflow registration](../junior.mtdn.dev/junior.mtdn.dev/apps/express/workflows/index.ts): durable infrastructure and composition roots.
 - [Photo-processing workflow](../junior.mtdn.dev/junior.mtdn.dev/apps/express/shopping-photo-processing.workflow.ts): a domain-owned workflow implementation.
@@ -53,6 +54,12 @@ Adapt these patterns to this project's requirements and installed Effect version
 - Use Effect Workflow's durable execution and waiting mechanisms. Verify installed APIs against the actual package types and official documentation; never invent persistence or recovery guarantees.
 - Keep the workflow definition separate from Linear transport, Codex process execution, Git operations, and artifact storage. Make those boundaries replaceable in tests.
 
+## Environment configuration
+
+Follow Junior’s `@t3-oss/env-core` pattern: define application environment variables, validation, coercion, and defaults together in `src/env.ts`, using `createEnv`, `zod/v4`, `runtimeEnv: process.env`, and `emptyStringAsUndefined: true`. Import `env` in runtime configuration and Drizzle tooling; do not add parallel Effect Config schemas or direct application-variable reads elsewhere.
+
+Keep `src/config.ts` as a thin adapter into replaceable Effect settings services. Brand domain values and wrap credentials with `Redacted` at that boundary. The Postgres layer uses `PgClient.layer` with the validated, redacted database URL. Keep test-container settings, child-process environment forwarding, and third-party library configuration at their existing boundaries. The test preload must provide the complete test environment before application modules import `env`; `TestPgClientLive` continues to require its dedicated `TEST_DATABASE_URL`.
+
 ## Database and root runtime
 
 - Use Drizzle schemas and its native Effect Postgres adapter, following Junior's `apps/express/shopping-db.ts`, `shopping-schema.ts`, and `shopping-store.ts`. Use typed query builders for application reads and writes. Keep raw SQL limited to PostgreSQL primitives such as connection-bound advisory locks and expressions unsupported by the query builder.
@@ -61,7 +68,7 @@ Adapt these patterns to this project's requirements and installed Effect version
 
 ## Execution invariants
 
-1. Every run belongs to one explicitly enrolled issue, repository, base commit, and managed worktree.
+1. Every run belongs to one label-selected issue, repository, base commit, and managed worktree.
 2. Every assignment belongs to one role and phase, with a durable identity and one active execution lease. A lease expiry alone does not prove a prior process stopped.
 3. PM refinement is required before implementation. QA examines the Developer's exact commit. PM acceptance examines that same commit and refinement.
 4. New implementation commits require QA again. Revised requirements return to PM and invalidate incompatible downstream evidence.

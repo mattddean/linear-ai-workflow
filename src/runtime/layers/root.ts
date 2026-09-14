@@ -17,5 +17,5 @@ const ServicesLayer = Layer.mergeAll(StoreLive, WorkspaceLive, LinearLive, Agent
 )
 export const RootLayer = CoordinatorLive.pipe(Layer.provideMerge(ServicesLayer))
 
-// Share process services across CLI handlers; the process boundary disposes this runtime on exit.
+// Share services within each process; its boundary disposes this runtime on exit.
 export const rootRuntime = ManagedRuntime.make(RootLayer)

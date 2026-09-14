@@ -6,3 +6,5 @@ node_modules/
 !.env.example
 .artifacts/
 .worktrees/
+
+.turbo/

@@ -10,6 +10,7 @@ import { Comment, Issue, error } from './domain'
 export class Linear extends Context.Tag('Linear')<
   Linear,
   {
+    readonly discover: Effect.Effect<readonly Issue[], AppError>
     readonly read: (id: IssueId | typeof IssueKey.Type) => Effect.Effect<Snapshot, AppError>
     readonly post: (input: { issueId: IssueId; body: string; eventMarker: string }) => Effect.Effect<Comment, AppError>
   }
@@ -22,6 +23,18 @@ const IssueResponse = Schema.Struct({ issue: Issue })
 const CommentsResponse = Schema.Struct({ issue: Schema.Struct({ comments: Page }) })
 const CreatedResponse = Schema.Struct({
   commentCreate: Schema.Struct({ success: Schema.Boolean, comment: Schema.NullOr(Comment) }),
+})
+const DiscoveryResponse = Schema.Struct({
+  issues: Schema.Struct({
+    nodes: Schema.Array(
+      Schema.Struct({
+        ...Issue.fields,
+        archivedAt: Schema.NullOr(Schema.String),
+        state: Schema.Struct({ type: Schema.String }),
+      }),
+    ),
+    pageInfo: Page.fields.pageInfo,
+  }),
 })
 const Envelope = Schema.Struct({
   errors: Schema.optional(Schema.Array(Schema.Struct({ message: Schema.String }))),
@@ -82,6 +95,38 @@ export const LinearLive = Layer.effect(
           while: (failure) => failure.kind === 'transport',
         }),
       )
+    const discover = Effect.fn('Linear.discover')(
+      function* () {
+        const issues: Issue[] = []
+        let after: string | null = null
+        for (;;) {
+          const page: typeof DiscoveryResponse.Type = yield* readRequest({
+            query: `query Discover($teamId: ID!, $after: String) {
+            issues(first: 100, after: $after, includeArchived: false, filter: {
+              team: { id: { eq: $teamId } }, labels: { name: { eq: "ai-workflow" } },
+              state: { type: { nin: ["completed", "canceled"] } }
+            }) {
+              nodes { id identifier title description updatedAt team { id } archivedAt state { type } }
+              pageInfo { hasNextPage endCursor }
+            }
+          }`,
+            variables: { teamId: settings.teamId, after },
+          }).pipe(Effect.flatMap(Schema.decodeUnknown(DiscoveryResponse)))
+          for (const issue of page.issues.nodes) {
+            if (issue.team.id !== settings.teamId)
+              return yield* error('linear', 'Discovered issue is outside the configured team')
+            if (issue.archivedAt === null && !['completed', 'canceled'].includes(issue.state.type)) issues.push(issue)
+          }
+          if (!page.issues.pageInfo.hasNextPage) break
+          const next = page.issues.pageInfo.endCursor
+          if (next === null || next === after)
+            return yield* error('linear', 'Linear discovery pagination did not advance')
+          after = next
+        }
+        return issues
+      },
+      Effect.mapError((failure) => error('linear', `Ticket discovery failed: ${failure.message}`)),
+    )
     const read = Effect.fn('Linear.read')(function* (id: IssueId | typeof IssueKey.Type) {
       const data = yield* readRequest({
         query: 'query Issue($id: String!) { issue(id: $id) { id identifier title description updatedAt team { id } } }',
@@ -139,6 +184,7 @@ export const LinearLive = Layer.effect(
       return comment
     })
     return Linear.of({
+      discover: discover(),
       read,
       post,
     })

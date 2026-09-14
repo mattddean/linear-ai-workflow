@@ -65,6 +65,7 @@ export const settings = {
   artifactRoot: Path.make('/tmp/artifacts'),
   pollSeconds: 1,
   workerId: WorkerId.make('test-machine'),
+  workerGroup: 'local' as const,
   runnerHost: '127.0.0.1',
   runnerPort: 34542,
 }
@@ -119,6 +120,7 @@ export function fixture(initial = makeRun()) {
     Effect.sync((): Snapshot => structuredClone({ ...state.snapshot, comments })),
   )
   const linear = Linear.of({
+    discover: Effect.succeed([state.snapshot.issue]),
     read,
     post: Effect.fn('Test.Linear.post')((input) =>
       Effect.suspend(() => {
@@ -141,6 +143,7 @@ export function fixture(initial = makeRun()) {
     ),
   })
   const store = Store.of({
+    enroll: () => Effect.succeed(false),
     create: (run) =>
       Effect.sync(() => {
         state.run = run

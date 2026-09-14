@@ -25,7 +25,7 @@ PM refinement --> Developer implementation --> QA verification --> PM acceptance
                                       Corrections
 ```
 
-1. Create a ticket in the configured Linear team and add the `ai-workflow` label, or add the label to an existing ticket. The running coordinator discovers it, records a durable run, and creates an isolated Git worktree from the configured repository and base branch.
+1. Create a ticket in the configured Linear team and add the `ai-workflow` label, or add the label to an existing ticket. The running coordinator discovers it, records a durable run with the configured repository and resolved base commit, and queues it. The worker creates its isolated Git worktree before the first PM assignment.
 2. The PM examines the ticket and repository, then publishes a refinement comment containing scope, numbered acceptance criteria, assumptions, and a verification plan.
 3. The Developer reads the published refinement, implements the change, runs the repository's required checks, and commits the result locally. Its handoff comment identifies the refinement and exact commit for QA.
 4. QA independently inspects and tests that revision. Findings return to the Developer; a passing report goes to the PM.
@@ -47,7 +47,7 @@ Each worker runs one ticket assignment at a time. Newly discovered tickets wait 
 
 ## Configuration
 
-Configure the coordinator with these environment variables. Keep secrets out of Git and agent prompts.
+Configure the coordinator with these environment variables. Keep secrets out of Git and agent prompts. Like Junior, `src/env.ts` validates the shared environment with `@t3-oss/env-core` and `zod/v4`; empty strings are treated as unset, and defaults live in that schema. The services, CLI, and Drizzle tooling validate the complete environment when imported, including `REPOSITORY_PATH` and `BASE_BRANCH`.
 
 | Variable               | Purpose                                                           |
 | ---------------------- | ----------------------------------------------------------------- |
@@ -85,7 +85,7 @@ bun run db:migrate
 bun run dev
 ```
 
-The root `dev` script runs the coordinator’s `dev` task alongside `dev:worker`, using Turbo’s terminal UI to keep their logs visible. These are long-running development services. Turbo manages the local processes; Effect Workflow and Postgres retain execution state across process restarts. Leave them running while you manage work in Linear.
+The root `dev` script runs `dev:coordinator` alongside `dev:worker`, using Turbo’s terminal UI to keep their logs visible. These are long-running development services. Turbo manages the local processes; Effect Workflow and Postgres retain execution state across process restarts. Leave them running while you manage work in Linear. Restart `bun run dev` after coordinator source changes; these tasks do not hot-reload during agent execution.
 
 Set `REPOSITORY_PATH` to the checkout you want the agents to develop and `BASE_BRANCH` to its starting branch, such as `main`. The watcher uses these settings for every ticket it discovers in `LINEAR_TEAM_ID`. Each run records its resolved base commit and owning worker so subsequent configuration changes do not move existing work.
 
@@ -99,7 +99,7 @@ Before dispatching PM, the coordinator records enrollment in Postgres. Repeated 
 
 Applying `ai-workflow` selects that ticket for local implementation commits and workflow comments. The worker takes queued work automatically as capacity becomes available. The label does not authorize pushing, merging, deployment, or Linear status changes. Removing the label before discovery prevents enrollment. Once a run is enrolled, use its pause control to stop further assignments; removing a label does not interrupt an agent mid-assignment.
 
-When a run needs your input, its comment explains the blocker and includes a question ID. Reply on the issue with that ID and your answer. The coordinator records the response and resumes the waiting phase. Material scope changes return to PM refinement. Ordinary comments provide context without starting a separate run.
+When a run needs your input, its comment explains the blocker and includes a question ID. Reply with that ID alone on the first line and your answer on subsequent lines. Prefix the answer with `SCOPE:` when it changes the requirements. The coordinator records the response and resumes the waiting phase. Material scope changes return to PM refinement. Ordinary comments provide context without starting a separate run.
 
 ## Operator controls
 
@@ -130,7 +130,7 @@ Application tables are defined in `src/db/schema.ts` using Drizzle. Generate and
 
 A resume can include `--answer "..."`, `--extra-minutes 30`, `--extra-tokens 100000`, or `--extra-attempts 1`. If you intentionally committed recovery changes, inspect them and use `--accept-head` to restart implementation from that clean revision. New implementation still passes through QA.
 
-After an unclean process exit, the worker publishes a blocker rather than repeating code execution. A process lease under `ARTIFACT_ROOT/agent.lock` prevents a surviving Codex process from overlapping a replacement. Stop the identified process group before resuming. If a crash left an incomplete lease with no PID, inspect local Codex processes before manually removing that lease directory.
+If a process exits before its assignment result was saved, the worker publishes a blocker rather than repeating code execution. Saved results resume publication reconciliation. A process lease under `ARTIFACT_ROOT/agent.lock` prevents a surviving Codex process from overlapping a replacement. Stop the identified process group before resuming. If a crash left an incomplete lease with no PID, inspect local Codex processes before manually removing that lease directory.
 
 Developer sessions use the ticket worktree as their writable root. PM and QA sessions use their assignment artifact directory as the writable root and inspect the target repository through its absolute path. Their prompts require reading the target repository's instructions; configure any required review tools in the shared Codex configuration. Changes to source detected after a review block the handoff.
 
@@ -138,7 +138,7 @@ Developer sessions use the ticket worktree as their writable root. PM and QA ses
 bun run test  # Complete suite; shared Testcontainers Postgres, Docker required
 ```
 
-Bun preloads `src/test/setup.ts` from `bunfig.toml` to start a shared disposable Postgres database and replace production database layers with `TestPgClientLive`, `TestDatabaseLive`, and `TestStoreLive`, following Junior. They query stored rows directly to verify transaction rollback, operator controls, handoff replay, and ambiguous-publication recovery, alongside cluster restart/resume and CLI startup/shutdown. SQL remains real; Linear and Codex are faked. Tests do not send real Linear comments or make OpenAI requests. A live run requires your configured credentials, a ticket selected with `ai-workflow`, and the target repository's prepared test environment.
+Bun preloads `src/test/setup.ts` from `bunfig.toml` to start a shared disposable Postgres database and replace production database layers with `TestPgClientLive`, `TestDatabaseLive`, and `TestStoreLive`, following Junior. They query stored rows directly to verify transaction rollback, operator controls, handoff replay, and ambiguous-publication recovery, alongside automatic discovery, concurrent enrollment, cluster restart/resume, and worker process startup/shutdown. SQL remains real; Linear and Codex are faked. Tests do not send real Linear comments or make OpenAI requests. A live run requires your configured credentials, a ticket selected with `ai-workflow`, and the target repository's prepared test environment.
 
 ## Roles
 
@@ -184,6 +184,11 @@ Effect Workflow persists execution progress and waits. A recorded assignment and
 Before posting a comment, the coordinator persists its body and unique event ID. If the request times out, it searches the issue's comments for that event before retrying. A handoff advances only after publication is confirmed. Interrupted agent assignments are reconciled against process state, logs, and worktree changes before another session starts.
 
 QA and PM approval apply to one refinement and one exact commit. A new refinement invalidates downstream acceptance; new code requires QA again. Changes to issue requirements during an assignment are checked before its handoff is accepted.
+
+## Current implementation gaps
+
+- **Recovery of a stale prepared handoff:** if the worktree changes after the report is saved but before publication, the activity retries while the run can remain `running`. The CLI accepts `resume` only for `blocked` or `paused` runs. Restore the report’s recorded clean revision to allow publication; `--accept-head` cannot currently replace an already prepared report. Automatic conversion of this case into a published, resumable blocker remains unimplemented.
+- **Report completeness:** the coordinator validates structured fields, role transitions, refinement IDs, commit identity, and publication. AC-N/QA-N coverage, report templates, and the adequacy of test evidence are enforced by role instructions and PM review, not by an automated artifact or acceptance-matrix validator.
 
 ## Boundaries
 

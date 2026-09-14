@@ -1,14 +1,13 @@
 import { defineConfig } from 'drizzle-kit'
 
-// Points Drizzle tooling at the application schema and configured database, limiting schema pushes to coordinator tables.
+import { env } from './src/env'
 
-const url = process.env.DATABASE_URL
-if (!url) throw new Error('DATABASE_URL is required')
+// Points Drizzle tooling at the application schema and configured database, limiting schema pushes to coordinator tables.
 
 export default defineConfig({
   schema: './src/db/schema.ts',
   out: './drizzle',
   dialect: 'postgresql',
-  dbCredentials: { url },
+  dbCredentials: { url: env.DATABASE_URL },
   tablesFilter: ['workflow_runs', 'workflow_assignments', 'workflow_worker_owners'],
 })

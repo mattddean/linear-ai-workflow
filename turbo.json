@@ -1,0 +1,31 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "tui",
+  "tasks": {
+    "dev:coordinator": {
+      "cache": false,
+      "persistent": true
+    },
+    "dev:worker": {
+      "cache": false,
+      "persistent": true
+    }
+  },
+  "globalPassThroughEnv": [
+    "DATABASE_URL",
+    "LINEAR_API_KEY",
+    "LINEAR_TEAM_ID",
+    "REPOSITORY_PATH",
+    "BASE_BRANCH",
+    "WORKFLOW_SHARD_GROUP",
+    "WORKER_ID",
+    "WORKTREE_ROOT",
+    "ARTIFACT_ROOT",
+    "POLL_SECONDS",
+    "WORKFLOW_RUNNER_HOST",
+    "WORKFLOW_RUNNER_PORT",
+    "CODEX_HOME",
+    "HOME",
+    "SSH_AUTH_SOCK"
+  ]
+}

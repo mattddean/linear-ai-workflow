@@ -126,5 +126,8 @@ export const ensureWorker = Effect.fn('Cluster.ensureWorker')(function* (group: 
       ),
   )
   if (!results.some(Boolean))
-    return yield* error('blocked', `No reachable ${group} worker. Start serve --worker ${group} on the owning machine.`)
+    return yield* error(
+      'blocked',
+      `No reachable ${group} worker. Set WORKFLOW_SHARD_GROUP=${group} and run bun run dev on the owning machine.`,
+    )
 })
