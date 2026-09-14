@@ -1,0 +1,34 @@
+import { Activity, DurableClock, DurableDeferred, Workflow } from '@effect/workflow'
+import { Effect } from 'effect'
+
+import { Coordinator } from './coordinator'
+import { AppError, RunId, StepResult } from './domain'
+
+export const TicketWorkflow = Workflow.make({
+  name: 'linear-ticket-v1',
+  payload: { id: RunId },
+  idempotencyKey: (input) => input.id,
+  error: AppError,
+})
+export const resumeSignal = (sequence: number) => DurableDeferred.make(`resume-${sequence}`)
+export const TicketWorkflowLive = TicketWorkflow.toLayer(
+  Effect.fn('TicketWorkflow.run')(function* (input) {
+    const coordinator = yield* Coordinator
+    for (let sequence = 0; ; sequence += 1) {
+      const result = yield* Activity.make({
+        name: `assignment-${sequence}`,
+        success: StepResult,
+        error: AppError,
+        execute: Effect.gen(function* () {
+          const attempt = yield* Activity.CurrentAttempt
+          if (attempt > 1) yield* DurableClock.sleep({ name: `retry-${sequence}-${attempt}`, duration: '30 seconds' })
+          return yield* coordinator
+            .step({ id: input.id, sequence })
+            .pipe(Effect.tapError((failure) => Effect.logError(failure.message)))
+        }),
+      }).pipe(Activity.retry({}))
+      if (result === 'complete') return
+      if (result === 'wait') yield* DurableDeferred.await(resumeSignal(sequence))
+    }
+  }),
+)

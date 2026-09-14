@@ -4,13 +4,13 @@ Instructions for agents developing Linear AI Workflow itself. PM, Developer, and
 
 ## Product contract
 
-Linear AI Workflow runs a local PM → Developer → QA → PM development team. It uses ordinary Linear GraphQL issue/comment operations, local Codex sessions pinned to `gpt-6-astra`, Effect Workflow, and a local Postgres database.
+Linear AI Workflow runs a local PM → Developer → QA → PM development team. It uses ordinary Linear GraphQL issue/comment operations, local Codex sessions pinned to `gpt-6-astra`, Effect Workflow, Effect Cluster, and Postgres.
 
 - Linear comments are the agents' communication channel. Publish and confirm a handoff before its recipient runs; construct the recipient's input from the persisted comment.
 - The database owns durable execution state. Do not reconstruct the entire workflow from comments or introduce a second orchestration engine.
 - Keep code execution, orchestration, and artifacts local. OpenAI performs model inference; Linear stores issue discussion.
 - Use polling. Do not add webhook infrastructure, Linear AI integration, hosted execution, or automatic backlog selection without a requirement.
-- Keep one ticket assignment active at a time. Do not add distributed throughput or parallel agent work speculatively.
+- Keep one ticket assignment active per worker. Use Effect Cluster with the same `--worker local` / `--worker default` shard-group routing pattern as junior. Preserve machine ownership of local worktrees; do not implicitly move code or artifacts when a worker changes.
 - PM alone accepts a result after independent QA. Acceptance does not authorize pushing, merging, deployment, or Linear status changes.
 
 ## Code quality
@@ -22,6 +22,16 @@ Use kebab-case filenames, camelCase TypeScript identifiers, and snake_case datab
 Infer types where possible; give public APIs and complex functions explicit return types. Do not use `any`, non-null assertions, `@ts-ignore`, or `@ts-expect-error`. Do not use type assertions to hide mismatches; literal `as const` is allowed. Validate external payloads with Effect Schema and derive types from schemas. Keep `unknown` at untrusted input boundaries, not in domain models. Use specific ID and state types instead of interchangeable strings.
 
 ## Effect architecture
+
+Use the local [junior repository](../junior.mtdn.dev/junior.mtdn.dev) as a reference for good Effect practices. Before implementing Effect services, durable workflows, or CLI commands, consult the relevant working examples there:
+
+- [Effect guidance in AGENTS.md](../junior.mtdn.dev/junior.mtdn.dev/AGENTS.md): named operations, service requirements, Layers, and runtime boundaries.
+- [Workflow engine](../junior.mtdn.dev/junior.mtdn.dev/apps/express/workflows/workflow-engine.ts) and [workflow registration](../junior.mtdn.dev/junior.mtdn.dev/apps/express/workflows/index.ts): durable infrastructure and composition roots.
+- [Photo-processing workflow](../junior.mtdn.dev/junior.mtdn.dev/apps/express/shopping-photo-processing.workflow.ts): a domain-owned workflow implementation.
+- [CLI composition](../junior.mtdn.dev/junior.mtdn.dev/apps/express/commands.ts): `@effect/cli` commands and the process runtime boundary.
+- [Workflow tests and test layers](../junior.mtdn.dev/junior.mtdn.dev/apps/express/workflows): persistence and recovery verification patterns.
+
+Adapt these patterns to this project's requirements and installed Effect versions. Junior is a reference, not a dependency or a source of app-specific requirements; this repository's instructions remain authoritative.
 
 - Use named `Effect.fn` for meaningful effectful operations and service methods. Keep pure transformations pure.
 - Model failures with typed errors and handle them at the layer that can act on them. Distinguish retryable transport failures, invalid responses, permission failures, and human blockers.

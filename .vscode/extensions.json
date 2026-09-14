@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "expo.vscode-expo-tools",
+    "yoavbls.pretty-ts-errors",
+    "bradlc.vscode-tailwindcss",
+    "foxundermoon.shell-format",
+    "ms-azuretools.vscode-containers",
+    "github.vscode-github-actions"
+  ]
+}

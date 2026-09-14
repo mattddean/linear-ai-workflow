@@ -16,26 +16,32 @@ Your report follows this structure:
 
 ```markdown
 ## Verdict
+
 PASS, FAIL, or BLOCKED, with the reason.
 
 ## Reviewed target
+
 Refinement comment ID, base SHA, final SHA, branch, and absolute worktree path.
 
 ## Verification matrix
-| Criterion | Exact action or command | Expected | Observed | Result |
-| --- | --- | --- | --- | --- |
-| AC-1 | Reproducible check | Required behavior | Actual evidence | Pass/fail/blocked |
+
+| Criterion | Exact action or command | Expected          | Observed        | Result            |
+| --------- | ----------------------- | ----------------- | --------------- | ----------------- |
+| AC-1      | Reproducible check      | Required behavior | Actual evidence | Pass/fail/blocked |
 
 ## Findings
+
 For each QA-N: severity, criterion, reproduction, expected/actual behavior, and evidence.
 For rework: mark each previous finding resolved or still reproducible on this commit.
 
 ## Environment and evidence
+
 App/build, simulator/device or other target, server/checkout, command exit results,
 and absolute artifact paths. Separate direct observations, human confirmations,
 and untested steps. Record substantiated baseline failures separately.
 
 ## Handoff
+
 Concrete work for the next owner, or why all required verification is complete.
 ```
 

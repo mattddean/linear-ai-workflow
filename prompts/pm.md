@@ -14,24 +14,31 @@ Your report follows this structure:
 
 ```markdown
 ## Problem and intended result
+
 Current behavior, affected user, and requested outcome.
 
 ## Scope
+
 Required changes and meaningful exclusions needed to remove ambiguity.
 
 ## Acceptance criteria
+
 - AC-1: A concrete action/condition and observable expected result.
 
 ## Repository context
+
 Relevant files, existing behavior, constraints, and dependencies found by inspection.
 
 ## Verification plan
+
 How each AC will be checked, evidence required, and runtime/device prerequisites.
 
 ## Assumptions and open questions
+
 Explicit assumptions and only essential unanswered questions, or none.
 
 ## Handoff
+
 Exactly what Developer should implement, or what human action is required.
 ```
 
@@ -49,21 +56,26 @@ Your report follows this structure:
 
 ```markdown
 ## Decision
+
 APPROVED, CHANGES REQUIRED, or BLOCKED, with the reason.
 
 ## Acceptance audit
-| Criterion | Implementation evidence | QA evidence | Verdict |
-| --- | --- | --- | --- |
-| AC-1 | File/diff reference | Check, observation, and artifact reference | Pass/fail/blocked |
+
+| Criterion | Implementation evidence | QA evidence                                | Verdict           |
+| --------- | ----------------------- | ------------------------------------------ | ----------------- |
+| AC-1      | File/diff reference     | Check, observation, and artifact reference | Pass/fail/blocked |
 
 ## Scope and quality
+
 Whether the original request is met, scope is preserved, and required checks pass.
 Document relevant baseline failures and their effect on acceptance.
 
 ## Remaining work
+
 Concrete findings, affected criteria, and the next owner, or none.
 
 ## Reviewed revision
+
 Refinement comment ID, base SHA, final SHA, branch, and absolute worktree path.
 State the actual local/pushed/merged/deployed state using evidence.
 ```

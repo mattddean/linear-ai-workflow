@@ -17,25 +17,31 @@ Your report follows this structure:
 
 ```markdown
 ## Result
+
 What changed and why it satisfies the refinement.
 
 ## Acceptance mapping
-| Criterion | Implementation |
-| --- | --- |
-| AC-1 | Behavior and relevant file references |
+
+| Criterion | Implementation                        |
+| --------- | ------------------------------------- |
+| AC-1      | Behavior and relevant file references |
 
 ## Checks executed
+
 Exact commands, exit status, and concise relevant output.
 Distinguish passed, failed, and unexecuted checks and explain gaps.
 
 ## Runtime evidence
+
 App/build, target, server/checkout, exact flow, observations, and artifact paths.
 Distinguish agent observations from human-confirmed behavior.
 
 ## Review target
+
 Refinement comment ID, base SHA, final SHA, branch, and absolute worktree path.
 
 ## QA handoff
+
 Reproduction steps, test prerequisites, relevant risks, and baseline failures.
 ```
 

@@ -2,7 +2,7 @@
 
 A local development team powered by GPT-6 Astra. A PM refines a Linear ticket, a Developer implements it, QA verifies it, and the PM reviews the complete result before accepting it.
 
-The coordinator runs on your Mac. Linear comments hold the team's requirements, reports, and handoffs. Effect Workflow and a local Postgres database persist execution so work can recover after interruptions. Code and test artifacts live in local Git worktrees. Model inference runs on OpenAI's service.
+The coordinator runs on your Mac. Linear comments hold the team's requirements, reports, and handoffs. Effect Workflow, Effect Cluster, and Postgres persist execution so work can recover after interruptions. Code and test artifacts live in local Git worktrees. Model inference runs on OpenAI's service.
 
 Linear AI features are not used. The integration reads issues and publishes ordinary comments through Linear's GraphQL API.
 
@@ -36,34 +36,41 @@ Approval means the local implementation satisfies the ticket. Pushing, merging, 
 - A local checkout of the repository being developed.
 - Any development servers, devices, and test prerequisites required by that repository.
 
-The coordinator runs one ticket assignment at a time. It uses outbound API requests and polls Linear for updates; no public endpoint or webhook tunnel is required. Work pauses while the Mac is asleep and reconciles when the coordinator resumes.
+Each worker runs one ticket assignment at a time. It uses outbound API requests and polls Linear for updates; no public endpoint or webhook tunnel is required. Work pauses while the Mac is asleep and reconciles when the coordinator resumes.
 
 ## Configuration
 
 Configure the coordinator with these environment variables. Keep secrets out of Git and agent prompts.
 
-| Variable | Purpose |
-| --- | --- |
-| `DATABASE_URL` | Connection to the coordinator's local Postgres database |
-| `LINEAR_API_KEY` | Credential used exclusively by the Linear adapter |
-| `LINEAR_TEAM_ID` | Team whose issues may be enrolled |
-| `WORKTREE_ROOT` | Absolute directory for managed ticket worktrees |
-| `ARTIFACT_ROOT` | Absolute directory for logs and verification artifacts |
+| Variable               | Purpose                                                 |
+| ---------------------- | ------------------------------------------------------- |
+| `DATABASE_URL`         | Connection to the coordinator's local Postgres database |
+| `LINEAR_API_KEY`       | Credential used exclusively by the Linear adapter       |
+| `LINEAR_TEAM_ID`       | Team whose issues may be enrolled                       |
+| `WORKTREE_ROOT`        | Absolute directory for managed ticket worktrees         |
+| `ARTIFACT_ROOT`        | Absolute directory for logs and verification artifacts  |
+| `WORKER_ID`            | Stable identity of the machine owning local files       |
+| `WORKFLOW_RUNNER_HOST` | Cluster address; defaults to `127.0.0.1`                |
+| `WORKFLOW_RUNNER_PORT` | Cluster socket port; defaults to `34541`                |
+| `POLL_SECONDS`         | Linear polling interval; defaults to `30`               |
 
 The model is fixed to `gpt-6-astra`. Model access failures pause the run; the coordinator does not substitute another model. Codex uses its configured authentication. Repository commands do not receive the coordinator's Linear credential or database connection settings.
 
-Defaults are a 30-second Linear polling interval and three implementation/QA attempts per refinement. Run duration and token budgets are configurable when enrolling a ticket.
+Defaults are a 30-second polling interval, three implementation attempts per refinement, a 120-minute active execution budget, and 1,000,000 reported tokens per run. Set `--max-attempts`, `--max-minutes`, and `--max-tokens` on `start`. The time limit interrupts an active Codex process. The token limit is checked between assignments using emitted usage; it is not a hard in-flight spending cap, and an interrupted turn may not emit complete usage.
 
 ## Usage
 
 ```sh
 bun install
+cp .env.example .env
+# Set LINEAR_API_KEY and LINEAR_TEAM_ID in .env.
+bun run db:up
 
 # Start the durable worker and Linear polling loop.
-bun run cli -- serve
+bun run cli -- serve --worker local
 
 # Enroll a ticket against a local repository and explicit base branch.
-bun run cli -- start ENG-123 --repo /absolute/path/to/repository --base main
+bun run cli -- start ENG-123 --repo /absolute/path/to/repository --base main --worker local
 
 # Inspect, pause, or resume a run using the ID returned by start.
 bun run cli -- status <run-id>
@@ -76,6 +83,33 @@ These CLI commands are the application's interface. Starting a ticket authorizes
 `pause` prevents further assignments and requests a controlled stop of an active session. `resume` reconciles the current worktree, persisted workflow, and pending Linear writes before continuing. It never assumes an interrupted agent made no changes.
 
 When a run needs your input, its comment explains the blocker and includes a question ID. Reply on the issue with that ID and your answer. The coordinator records the response and resumes the waiting phase. Material scope changes return to PM refinement. Ordinary comments provide context without automatically launching an assignment.
+
+## Worker groups and machines
+
+`--worker local` is the default for `start` and `serve`. `--worker default` selects the other group. The implementation follows junior's cluster routing: workflow activities, child workflows, deferred responses, and timers retain the selected shard group. Clients check that a worker is reachable before enrollment.
+
+Every machine uses the same Postgres database and the same ordered group registry in `src/workflow-engine.ts`. Set `WORKFLOW_RUNNER_HOST` to a private address reachable by the other machines, and use a unique `WORKFLOW_RUNNER_PORT` when running multiple processes on one host. The cluster socket is intended for a trusted private network; it has no public-facing authentication layer.
+
+`WORKER_ID` defaults to the hostname and must remain stable across restarts. Runs retain their owning machine, branch, and local paths. Enroll from that machine. There is one worker owner per group; a second machine can own the other group. Add future groups consistently to the registry on every node, preserving existing order. Worktrees and artifacts are not automatically transferred during failover.
+
+The CLI creates the coordinator tables when starting or serving; Effect Cluster initializes its own durable storage. Use a dedicated database. `bun run db:down` stops the provided development database and preserves its volume.
+
+## Recovery and verification
+
+`bun run cli -- list` lists runs. Status includes the current phase, question, latest report, owning worker, worktree, and accumulated usage.
+
+A resume can include `--answer "..."`, `--extra-minutes 30`, `--extra-tokens 100000`, or `--extra-attempts 1`. If you intentionally committed recovery changes, inspect them and use `--accept-head` to restart implementation from that clean revision. New implementation still passes through QA.
+
+After an unclean process exit, the worker publishes a blocker rather than repeating code execution. A process lease under `ARTIFACT_ROOT/agent.lock` prevents a surviving Codex process from overlapping a replacement. Stop the identified process group before resuming. If a crash left an incomplete lease with no PID, inspect local Codex processes before manually removing that lease directory.
+
+Developer sessions use the ticket worktree as their writable root. PM and QA sessions use their assignment artifact directory as the writable root and inspect the target repository through its absolute path. Their prompts require reading the target repository's instructions; configure any required review tools in the shared Codex configuration. Changes to source detected after a review block the handoff.
+
+```sh
+bun run test              # Fake Linear and Codex services; local process tests
+bun run test:integration  # Disposable Postgres via Testcontainers; Docker required
+```
+
+Integration tests exercise cluster routing, durable restart/resume, enrollment uniqueness, and CLI startup/shutdown. Tests do not send real Linear comments or make OpenAI requests. A live run requires your configured credentials, an explicitly enrolled ticket, and the target repository's prepared test environment.
 
 ## Roles
 
@@ -107,12 +141,12 @@ QA does not modify implementation source. Missing infrastructure, required devic
 
 ## State and recovery
 
-| Storage | Responsibility |
-| --- | --- |
-| Linear comments | Visible requirements, findings, handoffs, and human answers |
-| Local Postgres | Durable workflow execution, assignments, checkpoints, pending publications, and retry bookkeeping |
-| Local Git worktrees | Implementation branches and immutable review commits |
-| Local artifact directory | Command logs, screenshots, and other verification evidence |
+| Storage                  | Responsibility                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------- |
+| Linear comments          | Visible requirements, findings, handoffs, and human answers                                       |
+| Local Postgres           | Durable workflow execution, assignments, checkpoints, pending publications, and retry bookkeeping |
+| Local Git worktrees      | Implementation branches and immutable review commits                                              |
+| Local artifact directory | Command logs, screenshots, and other verification evidence                                        |
 
 Each workflow comment identifies its run, event, role, phase, outcome, predecessor comment, refinement comment, reviewed commit, and next owner. Comments are appended rather than rewritten; revised refinements explicitly supersede earlier ones.
 

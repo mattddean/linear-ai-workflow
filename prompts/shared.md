@@ -35,15 +35,15 @@ A pre-existing failure must be backed by evidence and assessed for its effect on
 
 Return one JSON object without Markdown fences or surrounding prose. Its fields are:
 
-| Field | Value |
-| --- | --- |
-| `outcome` | `ready`, `changes-required`, `blocked`, or `approved` |
-| `nextRole` | `pm`, `developer`, `qa`, `human`, or `null` |
-| `nextPhase` | `refinement`, `implementation`, `verification`, `acceptance`, or `null` |
+| Field                 | Value                                                                                               |
+| --------------------- | --------------------------------------------------------------------------------------------------- |
+| `outcome`             | `ready`, `changes-required`, `blocked`, or `approved`                                               |
+| `nextRole`            | `pm`, `developer`, `qa`, `human`, or `null`                                                         |
+| `nextPhase`           | `refinement`, `implementation`, `verification`, `acceptance`, or `null`                             |
 | `refinementCommentId` | The assigned refinement's actual Linear comment ID; `null` for a new refinement or when none exists |
-| `commitSha` | Full commit SHA actually inspected/produced; `null` when no implementation revision applies |
-| `report` | Complete Markdown report following your role's template |
-| `question` | The required human question for `blocked`; otherwise `null` |
+| `commitSha`           | Full commit SHA actually inspected/produced; `null` when no implementation revision applies         |
+| `report`              | Complete Markdown report following your role's template                                             |
+| `question`            | The required human question for `blocked`; otherwise `null`                                         |
 
 Copy identifiers from verified context. Never fabricate IDs, SHAs, test results, or artifact paths. For a new ready refinement, the coordinator binds its confirmed publication ID as the new refinement. For blocked work while drafting a refinement, retain the existing refinement ID if one was supplied.
 
@@ -51,19 +51,19 @@ The coordinator validates this result and adds trusted run, event, issue, role, 
 
 ## Routing
 
-| Assigned role/phase | Outcome and reason | Next role/phase |
-| --- | --- | --- |
-| PM/refinement | `ready` | Developer/implementation |
-| Developer/implementation | `ready` | QA/verification |
-| Developer/implementation | `changes-required`: requirement conflict | PM/refinement |
-| QA/verification | `ready` | PM/acceptance |
-| QA/verification | `changes-required`: implementation defect | Developer/implementation |
-| QA/verification | `changes-required`: requirement ambiguity | PM/refinement |
-| PM/acceptance | `changes-required`: implementation defect | Developer/implementation |
-| PM/acceptance | `changes-required`: missing QA evidence | QA/verification |
-| PM/acceptance | `changes-required`: refinement defect | PM/refinement |
-| PM/acceptance | `approved` | `null`/`null` |
-| Any | `blocked`: human action required | Human/`null` |
+| Assigned role/phase      | Outcome and reason                        | Next role/phase          |
+| ------------------------ | ----------------------------------------- | ------------------------ |
+| PM/refinement            | `ready`                                   | Developer/implementation |
+| Developer/implementation | `ready`                                   | QA/verification          |
+| Developer/implementation | `changes-required`: requirement conflict  | PM/refinement            |
+| QA/verification          | `ready`                                   | PM/acceptance            |
+| QA/verification          | `changes-required`: implementation defect | Developer/implementation |
+| QA/verification          | `changes-required`: requirement ambiguity | PM/refinement            |
+| PM/acceptance            | `changes-required`: implementation defect | Developer/implementation |
+| PM/acceptance            | `changes-required`: missing QA evidence   | QA/verification          |
+| PM/acceptance            | `changes-required`: refinement defect     | PM/refinement            |
+| PM/acceptance            | `approved`                                | `null`/`null`            |
+| Any                      | `blocked`: human action required          | Human/`null`             |
 
 A blocked assignment resumes its current phase after the coordinator validates the response. A scope-changing response returns to PM refinement. Missing evidence that QA can collect is QA rework; evidence requiring a human prerequisite is blocked.
 

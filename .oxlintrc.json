@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["oxc", "typescript"],
+  "options": {
+    "typeAware": true
+  },
+  "rules": {
+    "typescript/consistent-type-imports": [
+      "warn",
+      {
+        "fixStyle": "separate-type-imports",
+        "prefer": "type-imports"
+      }
+    ],
+    "typescript/no-misused-promises": [
+      "warn",
+      {
+        "checksVoidReturn": {
+          "attributes": false
+        }
+      }
+    ],
+    "typescript/no-non-null-assertion": "deny"
+  },
+  "ignorePatterns": [
+    ".cache",
+    ".agents",
+    ".claude",
+    ".codex",
+    ".expo",
+    ".nitro",
+    ".output",
+    ".turbo",
+    "drizzle",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules"
+  ]
+}
