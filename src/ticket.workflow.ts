@@ -4,6 +4,8 @@ import { Effect } from 'effect'
 import { Coordinator } from './coordinator'
 import { AppError, RunId, StepResult } from './domain'
 
+// Persists the assignment loop as an Effect Workflow with retryable activities and durable human-response waits.
+
 export const TicketWorkflow = Workflow.make({
   name: 'linear-ticket-v1',
   payload: { id: RunId },

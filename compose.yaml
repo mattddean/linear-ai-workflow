@@ -1,3 +1,5 @@
+# Runs the dedicated local Postgres database with a health check and persistent storage.
+
 services:
   postgres:
     image: postgres:17-alpine

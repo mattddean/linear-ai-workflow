@@ -5,6 +5,8 @@ import type { AppError, IssueId, IssueKey, Snapshot } from './domain'
 import { Settings } from './config'
 import { Comment, Issue, error } from './domain'
 
+// Reads team-scoped issues and paginated comments, and reconciles comment publication through Linear’s GraphQL API.
+
 export class Linear extends Context.Tag('Linear')<
   Linear,
   {

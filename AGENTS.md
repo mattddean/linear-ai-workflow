@@ -1,3 +1,5 @@
+<!-- Governs how coding agents structure, modify, and verify the coordinator repository. -->
+
 # AGENTS.md
 
 Instructions for agents developing Linear AI Workflow itself. PM, Developer, and QA runtime prompts are product behavior; this file governs changes to the coordinator repository.
@@ -15,13 +17,23 @@ Linear AI Workflow runs a local PM → Developer → QA → PM development team.
 
 ## Code quality
 
+Place a concise, non-JSDoc description of each authored file’s responsibility immediately after all imports, before implementation code. For files without imports that support comments, place it at the top. If that description needs unrelated responsibilities, reconsider the module boundary. Preserve strict JSON and generated file formats.
+
 Write only the code needed for the requested behavior. Favor readable functions, clear service boundaries, and existing patterns. Avoid speculative abstractions, compatibility layers, unrelated refactors, and explanatory comments for obvious code. Explain non-obvious ordering, retries, leases, and idempotency with concise comments.
 
-Use kebab-case filenames, camelCase TypeScript identifiers, and snake_case database columns. Keep external DTO naming faithful to its API and convert at service boundaries.
+Use kebab-case filenames. Domain workflow definitions use `*.workflow.ts`; feature command definitions use `*.command.ts`. Keep feature commands next to their domain modules. `src/commands.ts` is the composition and process entry point, not a place to implement feature commands.
+
+Match Junior’s layout: put shared workflow infrastructure and registration in `src/workflows/`, co-locate `*.test.ts` files with the modules they exercise, and put shared test setup, fixtures, and layers in `src/test/`. Do not create an `integration/` directory or separate integration test command. `bunfig.toml` preloads `src/test/setup.ts`, so `bun test` runs the complete suite against its disposable database.
+
+Use **snake_case throughout database data layers and APIs we own**: table exports, SQL tables and columns, Drizzle property names, query projections and write objects, persisted JSON keys (including nested records), and request/response DTO fields for our own APIs. Do not expose camelCase aliases for database fields.
+
+Keep camelCase for domain/service code and PascalCase for types, schemas, and Effect services. Use explicit typed boundary codecs to convert snake_case payloads to domain values and back. Third-party integrations must use the third party's native property names in requests, responses, schemas, and SDK calls. Do not introduce snake_case aliases or rename third-party fields to satisfy our own API convention. For example, Linear uses `createdAt`, `pageInfo`, and `commentCreate`. Convert to our database representation only when persisting that data. Third-party protocol and Effect Cluster storage formats remain owned by their libraries; do not rename their internals.
 
 Infer types where possible; give public APIs and complex functions explicit return types. Do not use `any`, non-null assertions, `@ts-ignore`, or `@ts-expect-error`. Do not use type assertions to hide mismatches; literal `as const` is allowed. Validate external payloads with Effect Schema and derive types from schemas. Keep `unknown` at untrusted input boundaries, not in domain models. Use specific ID and state types instead of interchangeable strings.
 
 ## Effect architecture
+
+When in doubt about how to structure any feature, service, database access, or infrastructure, inspect the corresponding implementation in Junior before choosing a pattern. Match its conventions unless this project has a concrete reason to differ.
 
 Use the local [junior repository](../junior.mtdn.dev/junior.mtdn.dev) as a reference for good Effect practices. Before implementing Effect services, durable workflows, or CLI commands, consult the relevant working examples there:
 
@@ -37,9 +49,15 @@ Adapt these patterns to this project's requirements and installed Effect version
 - Model failures with typed errors and handle them at the layer that can act on them. Distinguish retryable transport failures, invalid responses, permission failures, and human blockers.
 - Keep service requirements on Effects; provide Layers at composition roots. Do not create private runtimes inside domain services.
 - Use `Effect.runPromise` or `Effect.runFork` only at process/framework boundaries. Use scoped resources and interruption for processes, leases, and database connections.
-- Compose CLI commands with `@effect/cli`. Keep command parsing separate from workflow and domain logic.
+- Compose CLI commands with `@effect/cli` in domain-owned `*.command.ts` modules and aggregate them in `src/commands.ts`. Aggregate domain `*.workflow.ts` layers in `src/workflows/index.ts` and start them through `registerWorkflows()`.
 - Use Effect Workflow's durable execution and waiting mechanisms. Verify installed APIs against the actual package types and official documentation; never invent persistence or recovery guarantees.
 - Keep the workflow definition separate from Linear transport, Codex process execution, Git operations, and artifact storage. Make those boundaries replaceable in tests.
+
+## Database and root runtime
+
+- Use Drizzle schemas and its native Effect Postgres adapter, following Junior's `apps/express/shopping-db.ts`, `shopping-schema.ts`, and `shopping-store.ts`. Use typed query builders for application reads and writes. Keep raw SQL limited to PostgreSQL primitives such as connection-bound advisory locks and expressions unsupported by the query builder.
+- Define application tables in `src/db/schema.ts`. Do not create tables during CLI startup. Edit schema sources; the user generates and applies migrations for persistent databases. Tests may initialize only their own disposable database. Effect Cluster owns its internal storage setup.
+- Compose shared services in `src/runtime/layers/root.ts`. Follow the [Josiah root runtime](../../josiah/tests/src/lib/runtime/layers/root.ts) pattern: named base/service layers, exported `RootLayer`, and one module-level `rootRuntime`. Dispose it at the process boundary. Domain services retain Effect requirements and never invoke the runtime themselves.
 
 ## Execution invariants
 
@@ -73,6 +91,8 @@ Check that runtime tests exercise the intended worktree and revision. A server s
 ## Testing and completion
 
 Run `bun run format:fix`, `bun run lint:fix`, `bun run typecheck`, and relevant tests after code changes. Fix introduced errors and report pre-existing failures. Do not edit lockfiles manually; use Bun.
+
+For persistence, transaction, replay, and lock behavior, use the Junior-style `src/test/setup.ts` preload and `TestPgClientLive` / `TestDatabaseLive` / `TestStoreLive` layers. These use real Postgres, never mocked SQL, and expose the same database for direct snake_case row assertions. The preload owns container cleanup and sets `TEST_DATABASE_URL` without a fallback to `.env`. Keep pure routing and transport tests focused with fake services; the shared preload still owns the suite’s database lifecycle.
 
 Test orchestration with replaceable Linear and Codex services. Cover allowed transitions, QA rework, human-response correlation, stale revisions, retry limits, duplicate events, ambiguous comment publication, and interruption recovery. Test durable recovery against a disposable Postgres database owned by the test run; never use a user's persistent database for destructive tests.
 

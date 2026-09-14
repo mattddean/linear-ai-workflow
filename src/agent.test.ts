@@ -4,11 +4,13 @@ import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { Agent, AgentLive, countTokens } from '../src/agent'
-import { Settings } from '../src/config'
-import { Path } from '../src/domain'
-import { childEnvironment } from '../src/workspace'
-import { fixture, ready, settings } from './fixtures'
+import { Agent, AgentLive, countTokens } from './agent'
+import { childEnvironment } from './child-environment'
+import { Settings } from './config'
+import { Path } from './domain'
+import { fixture, ready, settings } from './test/fixtures'
+
+// Verifies Codex invocation, credential isolation, usage accounting, and process cleanup with a local fake executable.
 
 test('child environment excludes coordinator and inherited API credentials', () => {
   const previous = process.env.LINEAR_API_KEY

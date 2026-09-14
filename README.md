@@ -1,3 +1,5 @@
+<!-- Documents the local agent workflow, operator commands, configuration, and recovery behavior. -->
+
 # Linear AI Workflow
 
 A local development team powered by GPT-6 Astra. A PM refines a Linear ticket, a Developer implements it, QA verifies it, and the PM reviews the complete result before accepting it.
@@ -65,6 +67,9 @@ bun install
 cp .env.example .env
 # Set LINEAR_API_KEY and LINEAR_TEAM_ID in .env.
 bun run db:up
+# For a fresh database, generate and review the application schema migration, then apply it.
+bun run db:generate
+bun run db:migrate
 
 # Start the durable worker and Linear polling loop.
 bun run cli -- serve --worker local
@@ -88,11 +93,11 @@ When a run needs your input, its comment explains the blocker and includes a que
 
 `--worker local` is the default for `start` and `serve`. `--worker default` selects the other group. The implementation follows junior's cluster routing: workflow activities, child workflows, deferred responses, and timers retain the selected shard group. Clients check that a worker is reachable before enrollment.
 
-Every machine uses the same Postgres database and the same ordered group registry in `src/workflow-engine.ts`. Set `WORKFLOW_RUNNER_HOST` to a private address reachable by the other machines, and use a unique `WORKFLOW_RUNNER_PORT` when running multiple processes on one host. The cluster socket is intended for a trusted private network; it has no public-facing authentication layer.
+Every machine uses the same Postgres database and the same ordered group registry in `src/workflows/workflow-engine.ts`. Set `WORKFLOW_RUNNER_HOST` to a private address reachable by the other machines, and use a unique `WORKFLOW_RUNNER_PORT` when running multiple processes on one host. The cluster socket is intended for a trusted private network; it has no public-facing authentication layer.
 
 `WORKER_ID` defaults to the hostname and must remain stable across restarts. Runs retain their owning machine, branch, and local paths. Enroll from that machine. There is one worker owner per group; a second machine can own the other group. Add future groups consistently to the registry on every node, preserving existing order. Worktrees and artifacts are not automatically transferred during failover.
 
-The CLI creates the coordinator tables when starting or serving; Effect Cluster initializes its own durable storage. Use a dedicated database. `bun run db:down` stops the provided development database and preserves its volume.
+Application tables are defined in `src/db/schema.ts` using Drizzle. Generate and review migrations with `bun run db:generate`, then apply them with `bun run db:migrate` before starting the CLI. The schema preserves SQL table names and columns, but persisted JSON uses snake_case throughout. Existing camelCase JSON records require an explicit data migration before resuming their runs; an existing database also needs its baseline reconciled before applying an initial migration. Effect Cluster initializes its own durable storage. Use a dedicated database. `bun run db:down` stops the provided development database and preserves its volume.
 
 ## Recovery and verification
 
@@ -105,11 +110,10 @@ After an unclean process exit, the worker publishes a blocker rather than repeat
 Developer sessions use the ticket worktree as their writable root. PM and QA sessions use their assignment artifact directory as the writable root and inspect the target repository through its absolute path. Their prompts require reading the target repository's instructions; configure any required review tools in the shared Codex configuration. Changes to source detected after a review block the handoff.
 
 ```sh
-bun run test              # Fake Linear and Codex services; local process tests
-bun run test:integration  # Disposable Postgres via Testcontainers; Docker required
+bun run test  # Complete suite; shared Testcontainers Postgres, Docker required
 ```
 
-Integration tests exercise cluster routing, durable restart/resume, enrollment uniqueness, and CLI startup/shutdown. Tests do not send real Linear comments or make OpenAI requests. A live run requires your configured credentials, an explicitly enrolled ticket, and the target repository's prepared test environment.
+Bun preloads `src/test/setup.ts` from `bunfig.toml` to start a shared disposable Postgres database and replace production database layers with `TestPgClientLive`, `TestDatabaseLive`, and `TestStoreLive`, following Junior. They query stored rows directly to verify transaction rollback, operator controls, handoff replay, and ambiguous-publication recovery, alongside cluster restart/resume and CLI startup/shutdown. SQL remains real; Linear and Codex are faked. Tests do not send real Linear comments or make OpenAI requests. A live run requires your configured credentials, an explicitly enrolled ticket, and the target repository's prepared test environment.
 
 ## Roles
 
@@ -164,7 +168,7 @@ Run limits bound autonomous retries. Exhaustion produces a blocked comment with 
 
 ## Development
 
-The application uses Bun, TypeScript, Effect, Effect Workflow, and Postgres. Its CLI is built with `@effect/cli`. Linear integration, agent execution, workspace management, and durable orchestration are separate services composed at the process boundary.
+The application uses Bun, TypeScript, Effect, Effect Workflow, and Postgres. Its CLI is built with `@effect/cli`: domain-owned `*.command.ts` files are composed in `src/commands.ts`. Domain `*.workflow.ts` files are registered through `src/workflows/index.ts`. Tests are co-located with source; shared helpers and layers live in `src/test/`. `src/runtime/layers/root.ts` exports the shared `RootLayer` and `rootRuntime`, which is disposed when the CLI exits. Application queries use Drizzle’s native Effect Postgres adapter in `src/db/live.ts`. Linear integration, agent execution, workspace management, and durable orchestration are separate services composed at the process boundary.
 
 ```sh
 bun run format:fix

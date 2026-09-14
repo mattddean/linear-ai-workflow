@@ -14,9 +14,11 @@ import { BunClusterSocket } from '@effect/platform-bun'
 import { WorkflowEngine } from '@effect/workflow'
 import { Effect, Layer, Option } from 'effect'
 
-import type { WorkerGroup } from './domain'
+import type { WorkerGroup } from '../domain'
 
-import { error } from './domain'
+import { error } from '../domain'
+
+// Configures durable Effect Cluster storage and routes workflow execution and wakeups to the selected worker group.
 
 // Append groups only: Effect 0.54 derives Postgres advisory lock IDs from their order.
 export const workerGroups = ['default', 'local'] as const

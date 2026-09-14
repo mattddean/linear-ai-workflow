@@ -6,6 +6,8 @@ import { resolve } from 'node:path'
 
 import { Path, TeamId, WorkerId } from './domain'
 
+// Loads and validates worker configuration, local storage paths, and protected Linear credentials from the environment.
+
 export class Settings extends Context.Tag('Settings')<
   Settings,
   {

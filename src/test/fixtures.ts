@@ -1,10 +1,10 @@
 import { Effect, Layer, Redacted } from 'effect'
 
-import type { Assignment, Comment, Journal, Run, Result, Snapshot } from '../src/domain'
+import type { Assignment, Comment, Journal, Run, Result, Snapshot } from '../domain'
 
-import { Agent } from '../src/agent'
-import { Settings } from '../src/config'
-import { CoordinatorLive } from '../src/coordinator'
+import { Agent } from '../agent'
+import { Settings } from '../config'
+import { CoordinatorLive } from '../coordinator'
 import {
   CommentId,
   IssueId,
@@ -17,10 +17,12 @@ import {
   UserId,
   WorkerId,
   error,
-} from '../src/domain'
-import { Linear } from '../src/linear'
-import { Store } from '../src/store'
-import { Workspace } from '../src/workspace'
+} from '../domain'
+import { Linear } from '../linear'
+import { Store } from '../store'
+import { Workspace } from '../workspace'
+
+// Builds reusable workflow data and replaceable in-memory services for coordinator and integration tests.
 
 export const sha = CommitSha.make('a'.repeat(40))
 export const teamId = TeamId.make('00000000-0000-4000-8000-000000000001')

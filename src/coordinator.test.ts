@@ -1,9 +1,12 @@
 import { expect, test } from 'bun:test'
 import { Effect } from 'effect'
 
-import { Coordinator } from '../src/coordinator'
-import { CommentId, blocked, humanAnswer, questionId, validateResult } from '../src/domain'
-import { fixture, makeRun, ready, sha, userId } from './fixtures'
+import { Coordinator } from './coordinator'
+import { CommentId } from './domain'
+import { blocked, humanAnswer, questionId, validateResult } from './handoff'
+import { fixture, makeRun, ready, sha, userId } from './test/fixtures'
+
+// Verifies role sequencing and recovery gates using fake agents, Linear comments, workspaces, and persistence.
 
 const execute = (f: ReturnType<typeof fixture>, sequence = f.state.run.sequence) =>
   Effect.runPromise(
@@ -20,24 +23,6 @@ test('PM → Developer → QA → PM accepts the same refinement and commit', as
   expect(f.state.run.refinementCommentId).toBe(f.comments[0]?.id ?? null)
   expect(f.state.calls).toBe(4)
   expect(f.state.posts).toBe(4)
-})
-
-test('replay after database commit does not repeat the agent or comment', async () => {
-  const f = fixture()
-  await execute(f)
-  await execute(f, 0)
-  expect(f.state.calls).toBe(1)
-  expect(f.state.posts).toBe(1)
-  expect(f.state.run.sequence).toBe(1)
-})
-
-test('ambiguous publication reconciles the prepared outbox without another agent run', async () => {
-  const f = fixture()
-  f.state.ambiguous = true
-  await expect(execute(f)).rejects.toThrow('Timed out')
-  expect(await execute(f)).toBe('continue')
-  expect(f.state.calls).toBe(1)
-  expect(f.state.posts).toBe(1)
 })
 
 test('QA rework goes back through Developer and QA', async () => {

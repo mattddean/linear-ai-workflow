@@ -1,0 +1,4 @@
+# Runs every test with the shared disposable database setup, matching Junior’s Bun test convention.
+
+[test]
+preload = ["./src/test/setup.ts"]

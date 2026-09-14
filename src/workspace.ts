@@ -3,23 +3,11 @@ import { realpath, mkdir } from 'node:fs/promises'
 
 import type { AppError, Branch, Run } from './domain'
 
+import { childEnvironment } from './child-environment'
 import { CommitSha, Path, error } from './domain'
 
-export function childEnvironment(): NodeJS.ProcessEnv {
-  const allowed = [
-    'PATH',
-    'HOME',
-    'USER',
-    'LOGNAME',
-    'SHELL',
-    'TMPDIR',
-    'LANG',
-    'LC_ALL',
-    'CODEX_HOME',
-    'SSH_AUTH_SOCK',
-  ]
-  return Object.fromEntries(allowed.flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]])))
-}
+// Prepares and inspects enrolled Git worktrees, enforcing their base commit, branch, and clean revision.
+
 export const git = Effect.fn('Git.command')(function* (input: { cwd: Path; args: readonly string[] }) {
   return yield* Effect.tryPromise({
     try: async () => {

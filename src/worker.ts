@@ -1,15 +1,21 @@
 import { SqlClient } from '@effect/sql'
 import { DurableDeferred } from '@effect/workflow'
+import { and, eq, sql as expression } from 'drizzle-orm'
 import { Effect, Layer, Schedule, Schema } from 'effect'
 
-import type { Run, RunId, WorkerGroup } from './domain'
+import type { Run, WorkerGroup } from './domain'
 
 import { recoverAgentLease } from './agent'
 import { Settings } from './config'
-import { error, humanAnswer } from './domain'
+import { Db } from './db/live'
+import { workflow_runs, workflow_worker_owners } from './db/schema'
+import { error } from './domain'
+import { humanAnswer } from './handoff'
 import { Linear } from './linear'
 import { Store, controls } from './store'
-import { TicketWorkflow, resumeSignal } from './ticket-workflow'
+import { TicketWorkflow, resumeSignal } from './ticket.workflow'
+
+// Keeps a worker group owned by one machine and polls its runs for work and correlated resume requests.
 
 export const pollRuns = Effect.fn('Worker.pollRuns')(function* (group: WorkerGroup) {
   const store = yield* Store
@@ -93,24 +99,36 @@ export const acquireWorkerLock = Effect.fn('Worker.acquireLock')(function* (grou
   yield* Effect.addFinalizer(() =>
     connection.executeValues('SELECT pg_advisory_unlock(hashtext($1))', [key]).pipe(Effect.ignore),
   )
-  const foreign = yield* sql<{ id: RunId }>`SELECT id FROM workflow_runs
-    WHERE data->>'workerGroup'=${group} AND data->>'workerId'<>${settings.workerId}
-      AND data->>'status'<>'approved' LIMIT 1`
+  const db = yield* Db
+  const foreign = yield* db
+    .select({ id: workflow_runs.id })
+    .from(workflow_runs)
+    .where(
+      and(
+        expression`${workflow_runs.data}->>'worker_group' = ${group}`,
+        expression`${workflow_runs.data}->>'worker_id' <> ${settings.workerId}`,
+        expression`${workflow_runs.data}->>'status' <> 'approved'`,
+      ),
+    )
+    .limit(1)
   if (foreign.length > 0)
     return yield* error('blocked', `Group ${group} has unfinished runs on another machine; start its owning worker`)
-  yield* sql`INSERT INTO workflow_worker_owners(worker_group,worker_id) VALUES(${group},${settings.workerId})
-    ON CONFLICT(worker_group) DO UPDATE SET worker_id=EXCLUDED.worker_id`
+  yield* db
+    .insert(workflow_worker_owners)
+    .values({ worker_group: group, worker_id: settings.workerId })
+    .onConflictDoUpdate({ target: workflow_worker_owners.worker_group, set: { worker_id: settings.workerId } })
   yield* Effect.logInfo(`Worker ${settings.workerId} holds group ${group}`)
   // Loss of the lock connection terminates the worker scope and its child processes.
   return connection.executeValues('SELECT 1', []).pipe(Effect.repeat(Schedule.spaced('2 seconds')))
 })
 
 export const ensureOwner = Effect.fn('Worker.ensureOwner')(function* (group: WorkerGroup) {
-  const sql = yield* SqlClient.SqlClient
+  const db = yield* Db
   const settings = yield* Settings
-  const rows = yield* sql<{
-    worker_id: typeof settings.workerId
-  }>`SELECT worker_id FROM workflow_worker_owners WHERE worker_group=${group}`
+  const rows = yield* db
+    .select({ worker_id: workflow_worker_owners.worker_id })
+    .from(workflow_worker_owners)
+    .where(eq(workflow_worker_owners.worker_group, group))
   if (rows[0]?.worker_id !== settings.workerId)
     return yield* error(
       'blocked',

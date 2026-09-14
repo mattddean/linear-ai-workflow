@@ -17,20 +17,6 @@
   "sortPackageJson": {
     "sortScripts": true
   },
-  "sortTailwindcss": {
-    "stylesheet": "./apps/expo/src/global.css",
-    "functions": ["clsx", "cn", "cva"],
-    "preserveWhitespace": true
-  },
   "jsdoc": {},
-  "ignorePatterns": [
-    ".agents",
-    ".claude",
-    ".codex",
-    "apps/expo/src/uniwind-types.d.ts",
-    "apps/express/drizzle",
-    "packages/shared/src/zero-schema.gen.ts",
-    "bun.lock",
-    "turbo/generators/templates"
-  ]
+  "ignorePatterns": [".agents", ".claude", ".codex", "drizzle", "bun.lock"]
 }

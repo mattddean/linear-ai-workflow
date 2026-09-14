@@ -4,9 +4,12 @@ import { mkdir, readFile, writeFile, rm, open } from 'node:fs/promises'
 
 import type { AppError, AgentOutput, Assignment } from './domain'
 
+import { childEnvironment } from './child-environment'
 import { Settings } from './config'
-import { Result, error, roleFor } from './domain'
-import { childEnvironment } from './workspace'
+import { Result, error } from './domain'
+import { roleFor } from './handoff'
+
+// Runs a role-specific Codex assignment with structured output, usage accounting, and a recoverable process lease.
 
 export class Agent extends Context.Tag('Agent')<
   Agent,

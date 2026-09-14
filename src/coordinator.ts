@@ -5,11 +5,14 @@ import type { AppError, Assignment, Run, RunId, StepResult } from './domain'
 
 import { Agent, countTokens } from './agent'
 import { Settings } from './config'
-import { blocked, commentBody, error, fingerprint, discussionChanged, marker, validateResult } from './domain'
+import { error } from './domain'
 import { Path } from './domain'
+import { blocked, commentBody, fingerprint, discussionChanged, marker, validateResult } from './handoff'
 import { Linear } from './linear'
 import { Store } from './store'
 import { Workspace } from './workspace'
+
+// Executes one journaled assignment: checks prerequisites, runs its agent, confirms the Linear handoff, and advances the run.
 
 export class Coordinator extends Context.Tag('Coordinator')<
   Coordinator,
