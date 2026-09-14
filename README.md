@@ -4,6 +4,8 @@
 
 A local development team powered by GPT-6 Astra. A PM refines a Linear ticket, a Developer implements it, QA verifies it, and the PM reviews the complete result before accepting it.
 
+Start the system with `bun run dev`, just like Junior’s development services, and leave it running. Turbo runs the coordinator and workflow worker together. The coordinator watches Linear for tickets labeled `ai-workflow` and starts work automatically.
+
 The coordinator runs on your Mac. Linear comments hold the team's requirements, reports, and handoffs. Effect Workflow, Effect Cluster, and Postgres persist execution so work can recover after interruptions. Code and test artifacts live in local Git worktrees. Model inference runs on OpenAI's service.
 
 Linear AI features are not used. The integration reads issues and publishes ordinary comments through Linear's GraphQL API.
@@ -11,7 +13,10 @@ Linear AI features are not used. The integration reads issues and publishes ordi
 ## How it works
 
 ```text
-Enroll a Linear issue
+Add the ai-workflow label in Linear
+        |
+        v
+Running watcher discovers and queues the ticket
         |
         v
 PM refinement --> Developer implementation --> QA verification --> PM acceptance
@@ -20,7 +25,7 @@ PM refinement --> Developer implementation --> QA verification --> PM acceptance
                                       Corrections
 ```
 
-1. Enroll a ticket with the CLI. The coordinator reads its description and comments and creates an isolated Git worktree from the selected base branch.
+1. Create a ticket in the configured Linear team and add the `ai-workflow` label, or add the label to an existing ticket. The running coordinator discovers it, records a durable run, and creates an isolated Git worktree from the configured repository and base branch.
 2. The PM examines the ticket and repository, then publishes a refinement comment containing scope, numbered acceptance criteria, assumptions, and a verification plan.
 3. The Developer reads the published refinement, implements the change, runs the repository's required checks, and commits the result locally. Its handoff comment identifies the refinement and exact commit for QA.
 4. QA independently inspects and tests that revision. Findings return to the Developer; a passing report goes to the PM.
@@ -38,66 +43,86 @@ Approval means the local implementation satisfies the ticket. Pushing, merging, 
 - A local checkout of the repository being developed.
 - Any development servers, devices, and test prerequisites required by that repository.
 
-Each worker runs one ticket assignment at a time. It uses outbound API requests and polls Linear for updates; no public endpoint or webhook tunnel is required. Work pauses while the Mac is asleep and reconciles when the coordinator resumes.
+Each worker runs one ticket assignment at a time. Newly discovered tickets wait in a durable queue while it is busy. The coordinator uses outbound API requests and polls Linear for labeled tickets and discussion updates; no public endpoint or webhook tunnel is required. Work pauses while the Mac is asleep and reconciles when the coordinator resumes.
 
 ## Configuration
 
 Configure the coordinator with these environment variables. Keep secrets out of Git and agent prompts.
 
-| Variable               | Purpose                                                 |
-| ---------------------- | ------------------------------------------------------- |
-| `DATABASE_URL`         | Connection to the coordinator's local Postgres database |
-| `LINEAR_API_KEY`       | Credential used exclusively by the Linear adapter       |
-| `LINEAR_TEAM_ID`       | Team whose issues may be enrolled                       |
-| `WORKTREE_ROOT`        | Absolute directory for managed ticket worktrees         |
-| `ARTIFACT_ROOT`        | Absolute directory for logs and verification artifacts  |
-| `WORKER_ID`            | Stable identity of the machine owning local files       |
-| `WORKFLOW_RUNNER_HOST` | Cluster address; defaults to `127.0.0.1`                |
-| `WORKFLOW_RUNNER_PORT` | Cluster socket port; defaults to `34541`                |
-| `POLL_SECONDS`         | Linear polling interval; defaults to `30`               |
+| Variable               | Purpose                                                           |
+| ---------------------- | ----------------------------------------------------------------- |
+| `DATABASE_URL`         | Connection to the coordinator's local Postgres database           |
+| `LINEAR_API_KEY`       | Credential used exclusively by the Linear adapter                 |
+| `LINEAR_TEAM_ID`       | Team watched for tickets labeled `ai-workflow`                    |
+| `REPOSITORY_PATH`      | Absolute path to the local repository used for discovered tickets |
+| `BASE_BRANCH`          | Base branch used to create each ticket’s worktree                 |
+| `WORKFLOW_SHARD_GROUP` | Worker group for discovery and execution; defaults to `local`     |
+| `WORKTREE_ROOT`        | Absolute directory for managed ticket worktrees                   |
+| `ARTIFACT_ROOT`        | Absolute directory for logs and verification artifacts            |
+| `WORKER_ID`            | Stable identity of the machine owning local files                 |
+| `WORKFLOW_RUNNER_HOST` | Cluster address; defaults to `127.0.0.1`                          |
+| `WORKFLOW_RUNNER_PORT` | Cluster socket port; defaults to `34541`                          |
+| `POLL_SECONDS`         | Linear polling interval; defaults to `30`                         |
 
 The model is fixed to `gpt-6-astra`. Model access failures pause the run; the coordinator does not substitute another model. Codex uses its configured authentication. Repository commands do not receive the coordinator's Linear credential or database connection settings.
 
-Defaults are a 30-second polling interval, three implementation attempts per refinement, a 120-minute active execution budget, and 1,000,000 reported tokens per run. Set `--max-attempts`, `--max-minutes`, and `--max-tokens` on `start`. The time limit interrupts an active Codex process. The token limit is checked between assignments using emitted usage; it is not a hard in-flight spending cap, and an interrupted turn may not emit complete usage.
+Defaults are a 30-second polling interval, three implementation attempts per refinement, a 120-minute active execution budget, and 1,000,000 reported tokens per run. Automatically discovered runs receive these limits when they enter the queue. Review a blocked run before extending its budget through the operator controls. The time limit interrupts an active Codex process. The token limit is checked between assignments using emitted usage; it is not a hard in-flight spending cap, and an interrupted turn may not emit complete usage.
 
-## Usage
+## Running the system
+
+Configure the repository and base branch once, then start the development services through Turbo:
 
 ```sh
 bun install
 cp .env.example .env
-# Set LINEAR_API_KEY and LINEAR_TEAM_ID in .env.
+# Set LINEAR_API_KEY, LINEAR_TEAM_ID, REPOSITORY_PATH, and BASE_BRANCH in .env.
 bun run db:up
 # For a fresh database, generate and review the application schema migration, then apply it.
 bun run db:generate
 bun run db:migrate
 
-# Start the durable worker and Linear polling loop.
-bun run cli -- serve --worker local
+# Run the coordinator watcher and workflow worker together through Turbo.
+bun run dev
+```
 
-# Enroll a ticket against a local repository and explicit base branch.
-bun run cli -- start ENG-123 --repo /absolute/path/to/repository --base main --worker local
+The root `dev` script runs the coordinator’s `dev` task alongside `dev:worker`, using Turbo’s terminal UI to keep their logs visible. These are long-running development services. Turbo manages the local processes; Effect Workflow and Postgres retain execution state across process restarts. Leave them running while you manage work in Linear.
 
-# Inspect, pause, or resume a run using the ID returned by start.
+Set `REPOSITORY_PATH` to the checkout you want the agents to develop and `BASE_BRANCH` to its starting branch, such as `main`. The watcher uses these settings for every ticket it discovers in `LINEAR_TEAM_ID`. Each run records its resolved base commit and owning worker so subsequent configuration changes do not move existing work.
+
+## Automatic ticket pickup
+
+The `ai-workflow` label is the entry point for work. Add it when a ticket is ready for the agents, then follow their refinement, implementation report, QA findings, and final PM decision in that ticket’s comments.
+
+The watcher checks the configured team on startup and every `POLL_SECONDS` thereafter. It discovers both newly created labeled tickets and existing tickets that receive the label later, including tickets added while the system was stopped or the Mac was asleep. Open, unarchived tickets with the exact `ai-workflow` label are eligible; completed or canceled tickets are skipped.
+
+Before dispatching PM, the coordinator records enrollment in Postgres. Repeated polls, restarts, and multiple processes sharing that database do not create competing runs for the same ticket. Tickets already being worked on retain their current phase. A ticket accepted by PM stays complete even if its label remains; the watcher does not continuously re-enroll it.
+
+Applying `ai-workflow` selects that ticket for local implementation commits and workflow comments. The worker takes queued work automatically as capacity becomes available. The label does not authorize pushing, merging, deployment, or Linear status changes. Removing the label before discovery prevents enrollment. Once a run is enrolled, use its pause control to stop further assignments; removing a label does not interrupt an agent mid-assignment.
+
+When a run needs your input, its comment explains the blocker and includes a question ID. Reply on the issue with that ID and your answer. The coordinator records the response and resumes the waiting phase. Material scope changes return to PM refinement. Ordinary comments provide context without starting a separate run.
+
+## Operator controls
+
+Ticket selection happens in Linear. The CLI provides inspection and recovery controls for runs already discovered by the running system:
+
+```sh
+bun run cli -- list
 bun run cli -- status <run-id>
 bun run cli -- pause <run-id>
 bun run cli -- resume <run-id>
 ```
 
-These CLI commands are the application's interface. Starting a ticket authorizes local implementation commits and workflow comments on that ticket. The coordinator does not automatically select other backlog items.
-
-`pause` prevents further assignments and requests a controlled stop of an active session. `resume` reconciles the current worktree, persisted workflow, and pending Linear writes before continuing. It never assumes an interrupted agent made no changes.
-
-When a run needs your input, its comment explains the blocker and includes a question ID. Reply on the issue with that ID and your answer. The coordinator records the response and resumes the waiting phase. Material scope changes return to PM refinement. Ordinary comments provide context without automatically launching an assignment.
+`list` shows the run IDs associated with discovered tickets. `pause` prevents further assignments and requests a controlled stop of an active session. `resume` reconciles the current worktree, persisted workflow, and pending Linear writes before continuing. It never assumes an interrupted agent made no changes.
 
 ## Worker groups and machines
 
-`--worker local` is the default for `start` and `serve`. `--worker default` selects the other group. The implementation follows junior's cluster routing: workflow activities, child workflows, deferred responses, and timers retain the selected shard group. Clients check that a worker is reachable before enrollment.
+`WORKFLOW_SHARD_GROUP=local` is the default for the Turbo development services; set it to `default` to use the other group. The watcher and worker use the same selected group. The implementation follows Junior’s cluster routing: workflow activities, child workflows, deferred responses, and timers retain that group. Queued tickets wait for their owning worker to become available.
 
 Every machine uses the same Postgres database and the same ordered group registry in `src/workflows/workflow-engine.ts`. Set `WORKFLOW_RUNNER_HOST` to a private address reachable by the other machines, and use a unique `WORKFLOW_RUNNER_PORT` when running multiple processes on one host. The cluster socket is intended for a trusted private network; it has no public-facing authentication layer.
 
-`WORKER_ID` defaults to the hostname and must remain stable across restarts. Runs retain their owning machine, branch, and local paths. Enroll from that machine. There is one worker owner per group; a second machine can own the other group. Add future groups consistently to the registry on every node, preserving existing order. Worktrees and artifacts are not automatically transferred during failover.
+`WORKER_ID` defaults to the hostname and must remain stable across restarts. Runs retain their owning machine, branch, and local paths. Run the watcher on the machine holding the configured repository. There is one worker owner per group; a second machine can own the other group. Add future groups consistently to the registry on every node, preserving existing order. Worktrees and artifacts are not automatically transferred during failover.
 
-Application tables are defined in `src/db/schema.ts` using Drizzle. Generate and review migrations with `bun run db:generate`, then apply them with `bun run db:migrate` before starting the CLI. The schema preserves SQL table names and columns, but persisted JSON uses snake_case throughout. Existing camelCase JSON records require an explicit data migration before resuming their runs; an existing database also needs its baseline reconciled before applying an initial migration. Effect Cluster initializes its own durable storage. Use a dedicated database. `bun run db:down` stops the provided development database and preserves its volume.
+Application tables are defined in `src/db/schema.ts` using Drizzle. Generate and review migrations with `bun run db:generate`, then apply them with `bun run db:migrate` before starting the development services. The schema preserves SQL table names and columns, but persisted JSON uses snake_case throughout. Existing camelCase JSON records require an explicit data migration before resuming their runs; an existing database also needs its baseline reconciled before applying an initial migration. Effect Cluster initializes its own durable storage. Use a dedicated database. `bun run db:down` stops the provided development database and preserves its volume.
 
 ## Recovery and verification
 
@@ -113,7 +138,7 @@ Developer sessions use the ticket worktree as their writable root. PM and QA ses
 bun run test  # Complete suite; shared Testcontainers Postgres, Docker required
 ```
 
-Bun preloads `src/test/setup.ts` from `bunfig.toml` to start a shared disposable Postgres database and replace production database layers with `TestPgClientLive`, `TestDatabaseLive`, and `TestStoreLive`, following Junior. They query stored rows directly to verify transaction rollback, operator controls, handoff replay, and ambiguous-publication recovery, alongside cluster restart/resume and CLI startup/shutdown. SQL remains real; Linear and Codex are faked. Tests do not send real Linear comments or make OpenAI requests. A live run requires your configured credentials, an explicitly enrolled ticket, and the target repository's prepared test environment.
+Bun preloads `src/test/setup.ts` from `bunfig.toml` to start a shared disposable Postgres database and replace production database layers with `TestPgClientLive`, `TestDatabaseLive`, and `TestStoreLive`, following Junior. They query stored rows directly to verify transaction rollback, operator controls, handoff replay, and ambiguous-publication recovery, alongside cluster restart/resume and CLI startup/shutdown. SQL remains real; Linear and Codex are faked. Tests do not send real Linear comments or make OpenAI requests. A live run requires your configured credentials, a ticket selected with `ai-workflow`, and the target repository's prepared test environment.
 
 ## Roles
 
@@ -168,7 +193,7 @@ Run limits bound autonomous retries. Exhaustion produces a blocked comment with 
 
 ## Development
 
-The application uses Bun, TypeScript, Effect, Effect Workflow, and Postgres. Its CLI is built with `@effect/cli`: domain-owned `*.command.ts` files are composed in `src/commands.ts`. Domain `*.workflow.ts` files are registered through `src/workflows/index.ts`. Tests are co-located with source; shared helpers and layers live in `src/test/`. `src/runtime/layers/root.ts` exports the shared `RootLayer` and `rootRuntime`, which is disposed when the CLI exits. Application queries use Drizzle’s native Effect Postgres adapter in `src/db/live.ts`. Linear integration, agent execution, workspace management, and durable orchestration are separate services composed at the process boundary.
+The application uses Bun, TypeScript, Effect, Effect Workflow, and Postgres. Turbo starts the long-running coordinator and workflow worker through `bun run dev`. Operator controls use `@effect/cli`: domain-owned `*.command.ts` files are composed in `src/commands.ts`. Domain `*.workflow.ts` files are registered through `src/workflows/index.ts`. Tests are co-located with source; shared helpers and layers live in `src/test/`. `src/runtime/layers/root.ts` exports the shared `RootLayer` and `rootRuntime`, which each process disposes when it exits. Application queries use Drizzle’s native Effect Postgres adapter in `src/db/live.ts`. Linear integration, agent execution, workspace management, and durable orchestration are separate services composed at the process boundary.
 
 ```sh
 bun run format:fix
