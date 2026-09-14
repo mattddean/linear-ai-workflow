@@ -12,7 +12,7 @@ Linear AI Workflow runs a local PM → Developer → QA → PM development team.
 - The database owns durable execution state. Do not reconstruct the entire workflow from comments or introduce a second orchestration engine.
 - Keep code execution, orchestration, and artifacts local. OpenAI performs model inference; Linear stores issue discussion.
 - Use polling to automatically enroll open tickets labeled `ai-workflow` in the configured team. Run the watcher and worker through Turbo development tasks. Do not add webhooks, Linear AI integration, or hosted execution.
-- Keep one ticket assignment active per worker. Use Effect Cluster with Junior’s local/default shard-group routing, selected by `WORKFLOW_SHARD_GROUP`. Preserve machine ownership of local worktrees; do not implicitly move code or artifacts when a worker changes.
+- Keep one ticket assignment active per worker. Use Effect Cluster with Junior’s local/default shard-group routing, selected by `WORKFLOW_SHARD_GROUP`. Preserve machine ownership of local isolates; do not implicitly move code or artifacts when a worker changes.
 - PM alone accepts a result after independent QA. Acceptance does not authorize pushing, merging, deployment, or Linear status changes.
 
 ## Code quality
@@ -63,12 +63,12 @@ Keep `src/config.ts` as a thin adapter into replaceable Effect settings services
 ## Database and root runtime
 
 - Use Drizzle schemas and its native Effect Postgres adapter, following Junior's `apps/express/shopping-db.ts`, `shopping-schema.ts`, and `shopping-store.ts`. Use typed query builders for application reads and writes. Keep raw SQL limited to PostgreSQL primitives such as connection-bound advisory locks and expressions unsupported by the query builder.
-- Define application tables in `src/db/schema.ts`. Do not create tables during CLI startup. Edit schema sources; the user generates and applies migrations for persistent databases. Tests may initialize only their own disposable database. Effect Cluster owns its internal storage setup.
+- Define application tables in `src/db/schema.ts`. Do not create tables during CLI startup. Edit schema sources; the user generates migration files. Agents may run existing application migrations exclusively against a verified Whey isolate's own database, never shared development, production, or the coordinator database. Verify the recorded isolate path, generated environment, Compose project, published Postgres port, database name, and named volume before migration; use Whey's guarded `start` command. Tests may initialize only their own disposable Testcontainers database. Effect Cluster owns its internal storage setup.
 - Compose shared services in `src/runtime/layers/root.ts`. Follow the [Josiah root runtime](../../josiah/tests/src/lib/runtime/layers/root.ts) pattern: named base/service layers, exported `RootLayer`, and one module-level `rootRuntime`. Dispose it at the process boundary. Domain services retain Effect requirements and never invoke the runtime themselves.
 
 ## Execution invariants
 
-1. Every run belongs to one label-selected issue, repository, base commit, and managed worktree.
+1. Every run belongs to one label-selected issue, repository, base commit, and managed workspace.
 2. Every assignment belongs to one role and phase, with a durable identity and one active execution lease. A lease expiry alone does not prove a prior process stopped.
 3. PM refinement is required before implementation. QA examines the Developer's exact commit. PM acceptance examines that same commit and refinement.
 4. New implementation commits require QA again. Revised requirements return to PM and invalidate incompatible downstream evidence.
@@ -85,15 +85,29 @@ Persist an intended comment and its event ID before sending it. Reconcile ambigu
 
 Append reports and refinements instead of editing history. Keep enough evidence in each report to assess the result without relying on a private agent conversation. Record local artifact paths without uploading private media or secrets.
 
+## Whey workspace lifecycle
+
+- Provision ticket code with the bundled Whey CLI, not `git worktree add`. `Workspace.prepare` supplies the target
+  repository's `.whey.jsonc`, persisted base SHA, `codex/` branch, run ID, and isolate root. The source checkout must
+  be clean for initial creation; do not commit or discard unrelated user edits to satisfy this requirement.
+- Creation is headless. Effect Workflow remains the execution authority; Whey owns snapshot/runtime resources.
+  Reuse and validate the same isolate on retries. Never reset, overwrite, or silently adopt an unowned snapshot.
+- Use `bun run whey --config /absolute/repo/.whey.jsonc start RUN_ID` to initialize the isolate's database without
+  desktop apps. `open RUN_ID` initializes before first opening the configured development servers and desktop apps.
+  Neither command authorizes app builds/installs or changing user-owned device/signing prerequisites.
+- PM, Developer, and QA share the isolate; only Developer writes source. A desktop Space is not service-health evidence.
+- Preserve accepted isolates. Stop or destroy only when explicitly requested; preserve commits via local fetch/export
+  before destruction because a Rift snapshot has its own Git repository. Acceptance never pushes or merges.
+
 ## Codex and Git
 
 Start a fresh Codex session for each role assignment. Pin `gpt-6-astra`; do not silently fall back. Retain the configured authentication and permission enforcement. Capture process identity, exit status, final structured result, and artifact references.
 
-Reconcile interrupted processes and worktree changes before retrying an assignment. Prevent an older process from writing concurrently with its replacement. Cancellation must stop or account for the child process, not merely mark its database row paused.
+Reconcile interrupted processes and workspace changes before retrying an assignment. Prevent an older process from writing concurrently with its replacement. Cancellation must stop or account for the child process, not merely mark its database row paused.
 
 Only the Developer edits implementation source. QA may produce separate verification artifacts; PM and QA review without fixing source themselves. Create ticket branches under `codex/`, preserve unrelated work, and never reset or clean a user's checkout to recover a run.
 
-Check that runtime tests exercise the intended worktree and revision. A server serving another checkout is a blocker, not valid evidence. Keep review commits and acceptance evidence aligned.
+Check that runtime tests exercise the intended workspace and revision. A server serving another checkout is a blocker, not valid evidence. Keep review commits and acceptance evidence aligned.
 
 ## Testing and completion
 

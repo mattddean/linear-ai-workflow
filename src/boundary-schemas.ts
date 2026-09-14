@@ -57,7 +57,7 @@ export const RunData = Schema.Struct({
   issue_id: Run.fields.issueId,
   issue_key: Run.fields.issueKey,
   repo: Run.fields.repo,
-  worktree: Run.fields.worktree,
+  workspace: Run.fields.workspace,
   branch: Run.fields.branch,
   base_sha: Run.fields.baseSha,
   commit_sha: Run.fields.commitSha,

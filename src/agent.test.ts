@@ -32,12 +32,12 @@ async function mockCodex(options: { hang: boolean }) {
   const dir = await mkdtemp(join(tmpdir(), 'linear-agent-test-'))
   const f = fixture()
   const output = ready(f.state.run)
-  const script = `#!${process.execPath}\nconst args = process.argv.slice(2);\nawait Bun.write(${JSON.stringify(join(dir, 'args.json'))}, JSON.stringify(args));\n${options.hang ? 'await new Promise(() => { setInterval(() => {}, 1000) });' : `await Bun.write(args[args.indexOf('--output-last-message') + 1], ${JSON.stringify(JSON.stringify(output))});\nconsole.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:20,output_tokens:3}}));`}\n`
+  const script = `#!${process.execPath}\nconst args = process.argv.slice(2);\nawait Bun.write(${JSON.stringify(join(dir, 'args.json'))}, JSON.stringify(args));\nawait Bun.write(${JSON.stringify(join(dir, 'input.md'))}, await Bun.stdin.text());\n${options.hang ? 'await new Promise(() => { setInterval(() => {}, 1000) });' : `await Bun.write(args[args.indexOf('--output-last-message') + 1], ${JSON.stringify(JSON.stringify(output))});\nconsole.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:20,output_tokens:3}}));`}\n`
   await writeFile(join(dir, 'codex'), script)
   await chmod(join(dir, 'codex'), 0o755)
   const layer = AgentLive.pipe(Layer.provide(Layer.succeed(Settings, { ...settings, artifactRoot: Path.make(dir) })))
   const assignment = {
-    run: { ...f.state.run, worktree: Path.make(dir) },
+    run: { ...f.state.run, workspace: Path.make(dir) },
     snapshot: f.state.snapshot,
     artifactDir: Path.make(join(dir, 'assignment')),
   }
@@ -64,6 +64,10 @@ test('local runner pins Astra, uses structured output, isolates reviewer writes,
   expect(args).toContain('gpt-6-astra')
   expect(args).toContain(mock.assignment.artifactDir)
   expect(args).not.toContain('dangerously')
+  const input = await readFile(join(mock.dir, 'input.md'), 'utf8')
+  expect(input).toContain('whey/whey.mjs')
+  expect(input).toContain(`${mock.assignment.run.repo}/.whey.jsonc`)
+  expect(input).toContain(mock.assignment.run.id)
   expect(
     await stat(join(mock.dir, 'agent.lock')).then(
       () => true,

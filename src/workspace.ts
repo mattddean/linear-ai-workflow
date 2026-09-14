@@ -1,12 +1,14 @@
 import { Context, Effect, Layer, Schema } from 'effect'
-import { realpath, mkdir } from 'node:fs/promises'
+import { realpath } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-import type { AppError, Branch, Run } from './domain'
+import type { AppError, Run } from './domain'
 
 import { childEnvironment } from './child-environment'
-import { CommitSha, Path, error } from './domain'
+import { Branch, CommitSha, Path, RunId, error } from './domain'
 
-// Prepares and inspects enrolled Git worktrees, enforcing their base commit, branch, and clean revision.
+// Provisions Whey isolates and verifies their ownership, branch, base commit, and clean review revision.
 
 export const git = Effect.fn('Git.command')(function* (input: { cwd: Path; args: readonly string[] }) {
   return yield* Effect.tryPromise({
@@ -30,6 +32,67 @@ export const git = Effect.fn('Git.command')(function* (input: { cwd: Path; args:
       error('workspace', `Git ${input.args[0]} failed in ${input.cwd}; inspect the repository configuration`),
   })
 })
+const Isolate = Schema.Struct({
+  slug: RunId,
+  projectPath: Path,
+  repo: Path,
+  branch: Branch,
+  baseSha: CommitSha,
+})
+
+const whey = Effect.fn('Workspace.whey')(function* (run: Run, command: 'create' | 'inspect') {
+  const args = [
+    process.execPath,
+    fileURLToPath(new URL('../whey/whey.mjs', import.meta.url)),
+    '--config',
+    `${run.repo}/.whey.jsonc`,
+    command,
+    run.id,
+    ...(command === 'create'
+      ? ['--base', run.baseSha, '--branch', run.branch, '--root', dirname(run.workspace), '--json']
+      : []),
+  ]
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const child = yield* Effect.acquireRelease(
+        Effect.try({
+          try: () =>
+            Bun.spawn(args, {
+              cwd: run.repo,
+              detached: true,
+              env: childEnvironment(),
+              stdin: 'ignore',
+              stdout: 'pipe',
+              stderr: 'pipe',
+            }),
+          catch: () => error('workspace', 'Unable to start Whey'),
+        }),
+        (child) =>
+          Effect.promise(async () => {
+            if (child.exitCode === null) process.kill(-child.pid, 'SIGKILL')
+            await child.exited
+          }),
+      )
+      const [stdout, stderr, code] = yield* Effect.promise(() =>
+        Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+      )
+      if (code !== 0) return yield* error('blocked', `Whey ${command} failed: ${stderr.trim()}`)
+      const isolate = yield* Schema.decodeUnknown(Schema.parseJson(Isolate))(stdout).pipe(
+        Effect.mapError(() => error('workspace', 'Whey returned invalid isolate metadata')),
+      )
+      if (
+        isolate.slug !== run.id ||
+        isolate.projectPath !== run.workspace ||
+        isolate.repo !== run.repo ||
+        isolate.branch !== run.branch ||
+        isolate.baseSha !== run.baseSha
+      ) {
+        return yield* error('blocked', 'Whey isolate identity does not match the enrolled run')
+      }
+    }),
+  )
+})
+
 export class Workspace extends Context.Tag('Workspace')<
   Workspace,
   {
@@ -62,33 +125,22 @@ export const WorkspaceLive = Layer.succeed(
       }
     }),
     prepare: Effect.fn('Workspace.prepare')(function* (run) {
-      const exists = yield* Effect.tryPromise({
-        try: () => Bun.file(`${run.worktree}/.git`).exists(),
-        catch: () => error('workspace', 'Unable to inspect worktree'),
-      })
-      if (!exists) {
-        yield* Effect.tryPromise({
-          try: () => mkdir(run.worktree.substring(0, run.worktree.lastIndexOf('/')), { recursive: true }),
-          catch: () => error('workspace', 'Unable to create worktree directory'),
-        })
-        yield* git({ cwd: run.repo, args: ['worktree', 'add', '-b', run.branch, run.worktree, run.baseSha] })
-      }
-      const branch = yield* git({ cwd: run.worktree, args: ['branch', '--show-current'] })
-      if (branch !== run.branch) return yield* error('workspace', 'Worktree branch does not match the enrolled run')
+      yield* whey(run, 'create')
     }),
     inspect: Effect.fn('Workspace.inspect')(function* (run) {
-      const branch = yield* git({ cwd: run.worktree, args: ['branch', '--show-current'] })
-      if (branch !== run.branch) return yield* error('workspace', 'Worktree branch changed')
-      const dirty = yield* git({ cwd: run.worktree, args: ['status', '--porcelain', '--untracked-files=all'] })
+      yield* whey(run, 'inspect')
+      const branch = yield* git({ cwd: run.workspace, args: ['branch', '--show-current'] })
+      if (branch !== run.branch) return yield* error('workspace', 'Workspace branch changed')
+      const dirty = yield* git({ cwd: run.workspace, args: ['status', '--porcelain', '--untracked-files=all'] })
       if (dirty)
         return yield* error(
           'blocked',
-          `Worktree has uncommitted files. Reconcile ${run.worktree} without discarding work, then resume.`,
+          `Workspace has uncommitted files. Reconcile ${run.workspace} without discarding work, then resume.`,
         )
-      const head = yield* git({ cwd: run.worktree, args: ['rev-parse', 'HEAD'] })
-      yield* git({ cwd: run.worktree, args: ['merge-base', '--is-ancestor', run.baseSha, 'HEAD'] })
+      const head = yield* git({ cwd: run.workspace, args: ['rev-parse', 'HEAD'] })
+      yield* git({ cwd: run.workspace, args: ['merge-base', '--is-ancestor', run.baseSha, 'HEAD'] })
       return yield* Schema.decodeUnknown(CommitSha)(head).pipe(
-        Effect.mapError(() => error('workspace', 'Invalid worktree HEAD')),
+        Effect.mapError(() => error('workspace', 'Invalid workspace HEAD')),
       )
     }),
   }),

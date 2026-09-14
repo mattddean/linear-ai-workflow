@@ -60,7 +60,7 @@ test('budget exhaustion blocks without calling the agent', async () => {
 test('interrupted assignment requires human reconciliation and never repeats code automatically', async () => {
   const f = fixture()
   f.state.journals.set(0, {
-    assignment: { run: f.state.run, snapshot: f.state.snapshot, artifactDir: f.state.run.worktree },
+    assignment: { run: f.state.run, snapshot: f.state.snapshot, artifactDir: f.state.run.workspace },
     state: 'started',
     agentStarted: true,
     result: null,

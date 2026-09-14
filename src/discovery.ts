@@ -28,7 +28,7 @@ export const enrollIssue = Effect.fn('Discovery.enrollIssue')(function* (issue: 
     repo: base.repo,
     baseSha: base.baseSha,
     branch: Branch.make(`codex/${issue.identifier.toLowerCase()}-${id}`),
-    worktree: Path.make(resolve(settings.worktreeRoot, id)),
+    workspace: Path.make(resolve(settings.isolateRoot, id)),
     commitSha: null,
     refinementCommentId: null,
     predecessorId: null,

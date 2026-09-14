@@ -78,7 +78,7 @@ Concrete findings, affected criteria, and the next owner, or none.
 
 ## Reviewed revision
 
-Refinement comment ID, base SHA, final SHA, branch, and absolute worktree path.
+Refinement comment ID, base SHA, final SHA, branch, and absolute workspace path.
 State the actual local/pushed/merged/deployed state using evidence.
 ```
 

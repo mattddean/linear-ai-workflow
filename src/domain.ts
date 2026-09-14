@@ -63,7 +63,7 @@ export const Run = Schema.Struct({
   issueId: IssueId,
   issueKey: IssueKey,
   repo: Path,
-  worktree: Path,
+  workspace: Path,
   branch: Branch,
   baseSha: CommitSha,
   commitSha: Schema.NullOr(CommitSha),

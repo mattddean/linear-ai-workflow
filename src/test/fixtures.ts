@@ -35,7 +35,7 @@ export function makeRun(): Run {
     workerGroup: 'local',
     workerId: WorkerId.make('test-machine'),
     repo: Path.make('/tmp/repo'),
-    worktree: Path.make('/tmp/worktree'),
+    workspace: Path.make('/tmp/workspace'),
     branch: Branch.make('codex/test'),
     baseSha: sha,
     commitSha: null,
@@ -61,7 +61,7 @@ export function makeRun(): Run {
 export const settings = {
   linearKey: Redacted.make('test-key'),
   teamId,
-  worktreeRoot: Path.make('/tmp/worktrees'),
+  isolateRoot: Path.make('/tmp/isolates'),
   artifactRoot: Path.make('/tmp/artifacts'),
   pollSeconds: 1,
   workerId: WorkerId.make('test-machine'),

@@ -18,7 +18,8 @@
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "whey": "bun whey/whey.mjs"
   },
   "dependencies": {
     "@effect/cli": "0.72.1",

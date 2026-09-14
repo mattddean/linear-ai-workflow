@@ -38,7 +38,7 @@ test('handoff transaction rolls back its journal when the run update conflicts',
   const run = makeRun()
   const replacement = { ...makeRun(), issueId: run.issueId }
   const journal: Journal = {
-    assignment: { run, snapshot: fixture(run).state.snapshot, artifactDir: run.worktree },
+    assignment: { run, snapshot: fixture(run).state.snapshot, artifactDir: run.workspace },
     state: 'done',
     agentStarted: false,
     result: ready(run),
@@ -70,7 +70,7 @@ test('handoff transaction rolls back its journal when the run update conflicts',
       expect(persistedRun?.issue_id).toBe(run.issueId)
       expect(persistedRun?.data.worker_id).toBe(run.workerId)
       expect(persistedRun?.data).not.toHaveProperty('workerId')
-      expect(persistedJournal?.data.assignment.artifact_dir).toBe(run.worktree)
+      expect(persistedJournal?.data.assignment.artifact_dir).toBe(run.workspace)
       expect(persistedJournal?.data.assignment.snapshot.issue.updated_at).toBe(
         journal.assignment.snapshot.issue.updatedAt,
       )

@@ -49,7 +49,7 @@ export const CoordinatorLive = Layer.effect(
             if (current.workerId !== settings.workerId)
               return yield* error(
                 'blocked',
-                `Run belongs to worker ${current.workerId}; its worktree must not move implicitly`,
+                `Run belongs to worker ${current.workerId}; its workspace must not move implicitly`,
               )
             if (current.sequence !== input.sequence)
               return yield* error('storage', 'Run sequence and activity journal disagree')
@@ -99,7 +99,7 @@ export const CoordinatorLive = Layer.effect(
                 if (run.commitSha !== null && before !== run.commitSha)
                   return yield* error(
                     'blocked',
-                    'Worktree HEAD changed outside this assignment; reconcile the expected revision before resuming',
+                    'Workspace HEAD changed outside this assignment; reconcile the expected revision before resuming',
                   )
                 for (const id of [run.refinementCommentId, run.predecessorId]) {
                   if (id !== null && !snapshot.comments.some((comment) => comment.id === id))
@@ -162,7 +162,7 @@ export const CoordinatorLive = Layer.effect(
             } else if (journal.state === 'started') {
               const result = blocked(
                 current,
-                `An assignment was interrupted before its result was saved. Inspect ${journal.assignment.artifactDir} and ${current.worktree}, stop any surviving Codex process, and reconcile source before resuming.`,
+                `An assignment was interrupted before its result was saved. Inspect ${journal.assignment.artifactDir} and ${current.workspace}, stop any surviving Codex process, and reconcile source before resuming.`,
               )
               journal = { ...journal, state: 'prepared', result, body: commentBody(current, result) }
               yield* store.saveJournal(journal)
@@ -201,7 +201,7 @@ export const CoordinatorLive = Layer.effect(
               if (head !== reviewed)
                 return yield* error(
                   'blocked',
-                  'Prepared handoff no longer matches the worktree. Restore the reviewed revision before publication can continue.',
+                  'Prepared handoff no longer matches the workspace. Restore the reviewed revision before publication can continue.',
                 )
             }
             // This is an outbox: retry publication, never regenerate an agent report after an ambiguous write.

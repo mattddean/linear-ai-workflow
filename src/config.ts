@@ -12,7 +12,7 @@ export class Settings extends Context.Tag('Settings')<
   {
     readonly linearKey: Redacted.Redacted<string>
     readonly teamId: typeof TeamId.Type
-    readonly worktreeRoot: Path
+    readonly isolateRoot: Path
     readonly artifactRoot: Path
     readonly workerGroup: WorkerGroup
     readonly workerId: typeof WorkerId.Type
@@ -28,7 +28,7 @@ export const SettingsLive = Layer.succeed(Settings, {
   runnerPort: env.WORKFLOW_RUNNER_PORT,
   linearKey: Redacted.make(env.LINEAR_API_KEY),
   teamId: TeamId.make(env.LINEAR_TEAM_ID),
-  worktreeRoot: Path.make(env.WORKTREE_ROOT),
+  isolateRoot: Path.make(env.ISOLATE_ROOT),
   artifactRoot: Path.make(env.ARTIFACT_ROOT),
   pollSeconds: env.POLL_SECONDS,
 })

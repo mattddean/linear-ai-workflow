@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, JSONSchema, Schema, Option } from 'effect'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, readFile, writeFile, rm, open } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 import type { AppError, AgentOutput, Assignment } from './domain'
 
@@ -116,7 +117,14 @@ export const AgentLive = Layer.effect(
           const resultPath = `${dir}/result.json`
           const logPath = `${dir}/events.jsonl`
           yield* io(() => writeFile(schemaPath, JSON.stringify(JSONSchema.make(Result))))
-          const input = `${shared}\n\n${prompt}\n\n## Coordinator assignment\n\n${JSON.stringify(assignment)}\n`
+          const wheyCommand = [
+            process.execPath,
+            fileURLToPath(new URL('../whey/whey.mjs', import.meta.url)),
+            '--config',
+            `${assignment.run.repo}/.whey.jsonc`,
+          ]
+          const runtime = `## Whey runtime\n\nThe CLI is installed outside the target repository. Its command argument prefix is ${JSON.stringify(wheyCommand)}. Append inspect, start, or open and isolate ID ${assignment.run.id}. Use inspect to identify the isolate; start initializes its services and guarded migrations; open additionally opens desktop apps. Follow role permissions and target-repository prerequisites.\n`
+          const input = `${shared}\n\n${prompt}\n\n${runtime}\n## Coordinator assignment\n\n${JSON.stringify(assignment)}\n`
           yield* io(() => writeFile(`${dir}/assignment.json`, JSON.stringify(assignment, null, 2)))
           const output = yield* Effect.acquireRelease(
             io(() => open(logPath, 'w')),
@@ -133,7 +141,7 @@ export const AgentLive = Layer.effect(
             '--sandbox',
             'workspace-write',
             '--cd',
-            role === 'developer' ? assignment.run.worktree : dir,
+            role === 'developer' ? assignment.run.workspace : dir,
             '--add-dir',
             dir,
             '--skip-git-repo-check',
@@ -152,7 +160,7 @@ export const AgentLive = Layer.effect(
                   '/bin/sh',
                   ['-c', 'printf "%s" "$$" > "$1"; shift; exec "$@"', '--', `${lock}/pid`, 'codex', ...args],
                   {
-                    cwd: assignment.run.worktree,
+                    cwd: assignment.run.workspace,
                     env: childEnvironment(),
                     detached: true,
                     stdio: ['pipe', output.fd, stderr.fd],
@@ -183,7 +191,7 @@ export const AgentLive = Layer.effect(
           if (code !== 0)
             return yield* error(
               'agent',
-              `Codex exited ${code}. Inspect ${dir}/stderr.log and reconcile the worktree before resuming.`,
+              `Codex exited ${code}. Inspect ${dir}/stderr.log and reconcile the workspace before resuming.`,
             )
           const raw = yield* io(() => readFile(resultPath, 'utf8'))
           const result = yield* Schema.decodeUnknown(Schema.parseJson(Result))(raw).pipe(

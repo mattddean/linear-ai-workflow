@@ -17,7 +17,7 @@ export const env = createEnv({
     BASE_BRANCH: zStr,
     WORKFLOW_SHARD_GROUP: z.enum(['default', 'local']).default('local'),
     WORKER_ID: zStr.default(hostname()),
-    WORKTREE_ROOT: zPath.default(resolve('.worktrees')),
+    ISOLATE_ROOT: zPath.default(resolve('.isolates')),
     ARTIFACT_ROOT: zPath.default(resolve('.artifacts')),
     WORKFLOW_RUNNER_HOST: zStr.default('127.0.0.1'),
     WORKFLOW_RUNNER_PORT: z.coerce.number().int().min(1).max(65535).default(34541),

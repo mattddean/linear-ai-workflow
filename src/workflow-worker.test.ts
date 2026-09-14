@@ -31,7 +31,7 @@ test('worker process starts the cluster and shuts down cleanly against disposabl
               WORKFLOW_RUNNER_HOST: '127.0.0.1',
               WORKFLOW_RUNNER_PORT: '35672',
               ARTIFACT_ROOT: dir,
-              WORKTREE_ROOT: join(dir, 'worktrees'),
+              ISOLATE_ROOT: join(dir, 'isolates'),
             },
           }),
         ),

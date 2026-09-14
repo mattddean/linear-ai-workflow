@@ -6,7 +6,7 @@ A local development team powered by GPT-6 Astra. A PM refines a Linear ticket, a
 
 Start the system with `bun run dev`, just like Junior’s development services, and leave it running. Turbo runs the coordinator and workflow worker together. The coordinator watches Linear for tickets labeled `ai-workflow` and starts work automatically.
 
-The coordinator runs on your Mac. Linear comments hold the team's requirements, reports, and handoffs. Effect Workflow, Effect Cluster, and Postgres persist execution so work can recover after interruptions. Code and test artifacts live in local Git worktrees. Model inference runs on OpenAI's service.
+The coordinator runs on your Mac. Linear comments hold the team's requirements, reports, and handoffs. Effect Workflow, Effect Cluster, and Postgres persist execution so work can recover after interruptions. Code and test artifacts live in local Whey isolates. Model inference runs on OpenAI's service.
 
 Linear AI features are not used. The integration reads issues and publishes ordinary comments through Linear's GraphQL API.
 
@@ -25,7 +25,7 @@ PM refinement --> Developer implementation --> QA verification --> PM acceptance
                                       Corrections
 ```
 
-1. Create a ticket in the configured Linear team and add the `ai-workflow` label, or add the label to an existing ticket. The running coordinator discovers it, records a durable run with the configured repository and resolved base commit, and queues it. The worker creates its isolated Git worktree before the first PM assignment.
+1. Create a ticket in the configured Linear team and add the `ai-workflow` label, or add the label to an existing ticket. The running coordinator discovers it, records a durable run with the configured repository and resolved base commit, and queues it. The worker creates its Whey isolate before the first PM assignment.
 2. The PM examines the ticket and repository, then publishes a refinement comment containing scope, numbered acceptance criteria, assumptions, and a verification plan.
 3. The Developer reads the published refinement, implements the change, runs the repository's required checks, and commits the result locally. Its handoff comment identifies the refinement and exact commit for QA.
 4. QA independently inspects and tests that revision. Findings return to the Developer; a passing report goes to the PM.
@@ -55,9 +55,9 @@ Configure the coordinator with these environment variables. Keep secrets out of 
 | `LINEAR_API_KEY`       | Credential used exclusively by the Linear adapter                 |
 | `LINEAR_TEAM_ID`       | Team watched for tickets labeled `ai-workflow`                    |
 | `REPOSITORY_PATH`      | Absolute path to the local repository used for discovered tickets |
-| `BASE_BRANCH`          | Base branch used to create each ticket’s worktree                 |
+| `BASE_BRANCH`          | Base branch used to create each ticket’s workspace                |
 | `WORKFLOW_SHARD_GROUP` | Worker group for discovery and execution; defaults to `local`     |
-| `WORKTREE_ROOT`        | Absolute directory for managed ticket worktrees                   |
+| `ISOLATE_ROOT`         | Absolute directory for managed ticket isolates                    |
 | `ARTIFACT_ROOT`        | Absolute directory for logs and verification artifacts            |
 | `WORKER_ID`            | Stable identity of the machine owning local files                 |
 | `WORKFLOW_RUNNER_HOST` | Cluster address; defaults to `127.0.0.1`                          |
@@ -70,7 +70,7 @@ Defaults are a 30-second polling interval, three implementation attempts per ref
 
 ## Running the system
 
-Configure the repository and base branch once, then start the development services through Turbo:
+Configure the repository and base branch once, then start the development services through Turbo. The database setup commands below are manual operator actions; agents must not migrate the coordinator database:
 
 ```sh
 bun install
@@ -112,7 +112,7 @@ bun run cli -- pause <run-id>
 bun run cli -- resume <run-id>
 ```
 
-`list` shows the run IDs associated with discovered tickets. `pause` prevents further assignments and requests a controlled stop of an active session. `resume` reconciles the current worktree, persisted workflow, and pending Linear writes before continuing. It never assumes an interrupted agent made no changes.
+`list` shows the run IDs associated with discovered tickets. `pause` prevents further assignments and requests a controlled stop of an active session. `resume` reconciles the current workspace, persisted workflow, and pending Linear writes before continuing. It never assumes an interrupted agent made no changes.
 
 ## Worker groups and machines
 
@@ -120,19 +120,19 @@ bun run cli -- resume <run-id>
 
 Every machine uses the same Postgres database and the same ordered group registry in `src/workflows/workflow-engine.ts`. Set `WORKFLOW_RUNNER_HOST` to a private address reachable by the other machines, and use a unique `WORKFLOW_RUNNER_PORT` when running multiple processes on one host. The cluster socket is intended for a trusted private network; it has no public-facing authentication layer.
 
-`WORKER_ID` defaults to the hostname and must remain stable across restarts. Runs retain their owning machine, branch, and local paths. Run the watcher on the machine holding the configured repository. There is one worker owner per group; a second machine can own the other group. Add future groups consistently to the registry on every node, preserving existing order. Worktrees and artifacts are not automatically transferred during failover.
+`WORKER_ID` defaults to the hostname and must remain stable across restarts. Runs retain their owning machine, branch, and local paths. Run the watcher on the machine holding the configured repository. There is one worker owner per group; a second machine can own the other group. Add future groups consistently to the registry on every node, preserving existing order. Isolates and artifacts are not automatically transferred during failover.
 
 Application tables are defined in `src/db/schema.ts` using Drizzle. Generate and review migrations with `bun run db:generate`, then apply them with `bun run db:migrate` before starting the development services. The schema preserves SQL table names and columns, but persisted JSON uses snake_case throughout. Existing camelCase JSON records require an explicit data migration before resuming their runs; an existing database also needs its baseline reconciled before applying an initial migration. Effect Cluster initializes its own durable storage. Use a dedicated database. `bun run db:down` stops the provided development database and preserves its volume.
 
 ## Recovery and verification
 
-`bun run cli -- list` lists runs. Status includes the current phase, question, latest report, owning worker, worktree, and accumulated usage.
+`bun run cli -- list` lists runs. Status includes the current phase, question, latest report, owning worker, workspace, and accumulated usage.
 
 A resume can include `--answer "..."`, `--extra-minutes 30`, `--extra-tokens 100000`, or `--extra-attempts 1`. If you intentionally committed recovery changes, inspect them and use `--accept-head` to restart implementation from that clean revision. New implementation still passes through QA.
 
 If a process exits before its assignment result was saved, the worker publishes a blocker rather than repeating code execution. Saved results resume publication reconciliation. A process lease under `ARTIFACT_ROOT/agent.lock` prevents a surviving Codex process from overlapping a replacement. Stop the identified process group before resuming. If a crash left an incomplete lease with no PID, inspect local Codex processes before manually removing that lease directory.
 
-Developer sessions use the ticket worktree as their writable root. PM and QA sessions use their assignment artifact directory as the writable root and inspect the target repository through its absolute path. Their prompts require reading the target repository's instructions; configure any required review tools in the shared Codex configuration. Changes to source detected after a review block the handoff.
+Developer sessions use the ticket workspace as their writable root. PM and QA sessions use their assignment artifact directory as the writable root and inspect the target repository through its absolute path. Their prompts require reading the target repository's instructions; configure any required review tools in the shared Codex configuration. Changes to source detected after a review block the handoff.
 
 ```sh
 bun run test  # Complete suite; shared Testcontainers Postgres, Docker required
@@ -158,7 +158,7 @@ At acceptance, the PM inspects the actual diff and audits each criterion against
 
 ### Developer
 
-The Developer owns source changes and fixes. It follows the target repository's `AGENTS.md`, skills, architecture, and required checks. It implements the smallest complete change and reports the base commit, final commit, worktree, executed checks, and relevant artifacts.
+The Developer owns source changes and fixes. It follows the target repository's `AGENTS.md`, skills, architecture, and required checks. It implements the smallest complete change and reports the base commit, final commit, workspace, executed checks, and relevant artifacts.
 
 It sends product ambiguities back to PM and implementation results to QA. It does not change the acceptance criteria or approve its own work.
 
@@ -174,25 +174,61 @@ QA does not modify implementation source. Missing infrastructure, required devic
 | ------------------------ | ------------------------------------------------------------------------------------------------- |
 | Linear comments          | Visible requirements, findings, handoffs, and human answers                                       |
 | Local Postgres           | Durable workflow execution, assignments, checkpoints, pending publications, and retry bookkeeping |
-| Local Git worktrees      | Implementation branches and immutable review commits                                              |
+| Local Whey isolates      | Implementation branches and immutable review commits                                              |
 | Local artifact directory | Command logs, screenshots, and other verification evidence                                        |
 
 Each workflow comment identifies its run, event, role, phase, outcome, predecessor comment, refinement comment, reviewed commit, and next owner. Comments are appended rather than rewritten; revised refinements explicitly supersede earlier ones.
 
 Effect Workflow persists execution progress and waits. A recorded assignment and an exclusive execution lease prevent competing dispatches. External effects still require reconciliation: durability does not make a comment publication or a Codex process exactly-once.
 
-Before posting a comment, the coordinator persists its body and unique event ID. If the request times out, it searches the issue's comments for that event before retrying. A handoff advances only after publication is confirmed. Interrupted agent assignments are reconciled against process state, logs, and worktree changes before another session starts.
+Before posting a comment, the coordinator persists its body and unique event ID. If the request times out, it searches the issue's comments for that event before retrying. A handoff advances only after publication is confirmed. Interrupted agent assignments are reconciled against process state, logs, and workspace changes before another session starts.
 
 QA and PM approval apply to one refinement and one exact commit. A new refinement invalidates downstream acceptance; new code requires QA again. Changes to issue requirements during an assignment are checked before its handoff is accepted.
 
+## Whey integration
+
+Each ticket gets one headless Whey isolate through `src/workspace.ts`; the coordinator no longer creates Git
+worktrees. It passes the target repository's `.whey.jsonc`, exact enrolled base commit, unique run ID, and `codex/`
+branch to the bundled CLI. `ISOLATE_ROOT` controls managed snapshot placement. The source must be clean for first
+creation. Retries preserve the isolate and its commits; dirty or inconsistent snapshots block instead of being reset.
+
+The target configuration must declare exactly one project whose source is `.`. Whey accepts JSONC comments and
+trailing commas. The target config owns generated environment values and optional runtime hooks; the coordinator
+owns durable assignments and reviews. Source schemas, persisted run JSON, and prompts now use `workspace` rather
+than `worktree`. This is a clean break: existing worktree run/journal payloads are not automatically converted or
+resumed. Preserve old runs and artifacts before switching an existing coordinator to this version; do not edit its
+database through an application-isolate migration command.
+
+From this coordinator repository:
+
+```sh
+bun run whey --config /absolute/path/to/target/.whey.jsonc inspect RUN_ID
+bun run whey --config /absolute/path/to/target/.whey.jsonc start RUN_ID
+bun run whey --config /absolute/path/to/target/.whey.jsonc open RUN_ID
+```
+
+`start` runs initialization hooks without opening GUI apps. Before any migration hook it checks the live database
+container's Compose project, published port, database name, and named volume against the generated isolate settings.
+`open` runs initialization before first opening the desktop environment. The coordinator does not automatically
+open windows or start another interactive Codex. Verify the actual app/server revision and endpoints when testing;
+reopening a Space is not a health check. Existing development builds and physical-device preparation remain user
+prerequisites.
+
+Application migrations are allowed only inside verified Whey isolates. Generating migration files remains the user's
+responsibility. Automated tests continue to own disposable Testcontainers databases. Acceptance retains the isolate;
+stop/destroy are explicit operator actions. Before destroying, preserve the isolate branch, for example by fetching
+it locally into the original repository with an explicit destination branch. Pushing and merging remain separate actions.
+
+See [Whey's command reference](./whey/README.md).
+
 ## Current implementation gaps
 
-- **Recovery of a stale prepared handoff:** if the worktree changes after the report is saved but before publication, the activity retries while the run can remain `running`. The CLI accepts `resume` only for `blocked` or `paused` runs. Restore the report’s recorded clean revision to allow publication; `--accept-head` cannot currently replace an already prepared report. Automatic conversion of this case into a published, resumable blocker remains unimplemented.
+- **Recovery of a stale prepared handoff:** if the workspace changes after the report is saved but before publication, the activity retries while the run can remain `running`. The CLI accepts `resume` only for `blocked` or `paused` runs. Restore the report’s recorded clean revision to allow publication; `--accept-head` cannot currently replace an already prepared report. Automatic conversion of this case into a published, resumable blocker remains unimplemented.
 - **Report completeness:** the coordinator validates structured fields, role transitions, refinement IDs, commit identity, and publication. AC-N/QA-N coverage, report templates, and the adequacy of test evidence are enforced by role instructions and PM review, not by an automated artifact or acceptance-matrix validator.
 
 ## Boundaries
 
-The coordinator follows each target repository's instructions and permission rules. It preserves unrelated edits, confines implementation to its managed worktree, and pauses for missing user-owned prerequisites. It does not repair device signing, install development builds, or mutate persistent application databases merely to make testing pass.
+The coordinator follows each target repository's instructions and permission rules. It preserves unrelated edits, confines implementation to its managed workspace, and pauses for missing user-owned prerequisites. It does not repair device signing, install development builds, or mutate persistent application databases merely to make testing pass.
 
 Run limits bound autonomous retries. Exhaustion produces a blocked comment with the work completed and the decision needed. A workflow's persisted pause is distinct from an agent claiming the task is complete.
 

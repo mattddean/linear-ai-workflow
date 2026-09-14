@@ -1,20 +1,34 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parseArgs } from 'node:util'
 
+// Provisions isolated repository snapshots and optionally manages their desktop windows and services.
+
+const { values: options, positionals } = parseArgs({
+  args: process.argv.slice(2),
+  allowPositionals: true,
+  options: {
+    config: { type: 'string' },
+    root: { type: 'string' },
+    base: { type: 'string' },
+    branch: { type: 'string' },
+    json: { type: 'boolean' },
+    open: { type: 'boolean' },
+  },
+})
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.resolve(scriptDir, '..')
-const configPath = path.join(repoRoot, '.whey.jsonc')
+const configPath = path.resolve(options.config ?? path.join(process.cwd(), '.whey.jsonc'))
+const repoRoot = path.dirname(configPath)
 const hammerspoonBridgePath = path.join(scriptDir, 'hammerspoon.lua')
-
-const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+const config =
+  positionals[0] === 'help' || !positionals[0] ? null : Bun.JSONC.parse(fs.readFileSync(configPath, 'utf8'))
 const wheySystemVersion = '0.1.0'
 
-const isolateCommands = new Set(['create', 'open'])
 function fail(message) {
   console.error(message)
   process.exit(1)
@@ -140,24 +154,30 @@ function runHammerspoon(action, payload = {}) {
   return message.result
 }
 
-function requiredNamesFor(command) {
-  if (isolateCommands.has(command)) {
+function requiredNamesFor(command, state) {
+  if (command === 'create') return ['git', 'rift']
+  if (command === 'open') {
     return config.required.map((item) => item.name)
   }
 
+  if (command === 'start') return ['docker']
   if (command === 'stop') {
-    return ['docker', 'hammerspoon', 'Hammerspoon', 'Ghostty']
+    return state?.macosSpaceId || state?.ghosttyWindowId
+      ? ['docker', 'hammerspoon', 'Hammerspoon', 'Ghostty']
+      : ['docker']
   }
 
   if (command === 'destroy') {
-    return ['git', 'rift', 'docker', 'hammerspoon', 'Hammerspoon', 'Ghostty']
+    return state?.macosSpaceId || state?.ghosttyWindowId
+      ? ['git', 'rift', 'docker', 'hammerspoon', 'Hammerspoon', 'Ghostty']
+      : ['git', 'rift', 'docker']
   }
 
   return []
 }
 
-function preflight(command) {
-  const names = new Set(requiredNamesFor(command))
+function preflight(command, state) {
+  const names = new Set(requiredNamesFor(command, state))
 
   for (const requirement of config.required) {
     if (!names.has(requirement.name)) {
@@ -242,7 +262,7 @@ function ensureStateRoot() {
 }
 
 function riftRoot() {
-  return absolutePath(config.riftRoot)
+  return options.root ? path.resolve(options.root) : absolutePath(config.riftRoot)
 }
 
 function browserRoot() {
@@ -258,7 +278,7 @@ function readState(slug) {
   const file = stateFile(slug)
 
   if (!fs.existsSync(file)) {
-    fail(`No isolate found for '${slug}'. Create it with: pnpm whey create ${slug}`)
+    fail(`No isolate found for '${slug}'. Create it with: bun run whey create ${slug}`)
   }
 
   return normalizeState(JSON.parse(fs.readFileSync(file, 'utf8')))
@@ -269,7 +289,9 @@ function saveState(state) {
   const file = stateFile(state.slug)
   fs.mkdirSync(path.dirname(file), { recursive: true })
   // This state file is the source of truth for later stop/destroy operations.
-  fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`)
+  const temporary = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`)
+  fs.renameSync(temporary, file)
 }
 
 function normalizeState(state) {
@@ -564,48 +586,82 @@ async function ensureConfiguredPorts(state) {
   saveState(state)
 }
 
+function snapshotGit(projectPath, args) {
+  return run('git', ['-C', projectPath, ...args], { stdio: 'pipe' }).trim()
+}
+
 function createRiftProject(project, state) {
   const sourcePath = sourcePathFor(project)
+  const projectPath = riftPathFor(project, state)
+  const managed = state.managed
+  let checkpoint = state.projects[project.id]
 
-  if (!fs.existsSync(sourcePath)) {
-    fail(`Project source does not exist: ${sourcePath}`)
+  if (checkpoint?.phase === 'ready') return checkpoint.path
+  if (!checkpoint) {
+    if (fs.existsSync(projectPath)) fail(`Unowned snapshot already exists: ${projectPath}`)
+    if (managed && snapshotGit(sourcePath, ['status', '--porcelain', '--untracked-files=all'])) {
+      fail('Source checkout has uncommitted files. Commit or preserve them before creating a managed isolate.')
+    }
+    checkpoint = {
+      path: projectPath,
+      envFile: '',
+      phase: 'copying',
+      sourceSha: snapshotGit(sourcePath, ['rev-parse', 'HEAD']),
+    }
+    // Persist ownership before Rift starts; a retry must inspect an existing copy rather than overwrite it.
+    state.projects[project.id] = checkpoint
+    saveState(state)
   }
 
-  fs.mkdirSync(riftRoot(), { recursive: true })
-  run('rift', ['init', '--here'], { cwd: sourcePath })
+  if (!fs.existsSync(projectPath)) {
+    fs.mkdirSync(riftRoot(), { recursive: true })
+    run('rift', ['init', '--here'], { cwd: sourcePath, stdio: 'pipe' })
+    run('rift', ['create', '--name', path.basename(projectPath), '--into', riftRoot(), '--copy-all', '--no-hooks'], {
+      cwd: sourcePath,
+      stdio: 'pipe',
+    })
+  }
 
-  const targetPath = riftPathFor(project, state)
-  const output = run('rift', ['create', '--name', path.basename(targetPath), '--into', riftRoot(), '--copy-all'], {
-    cwd: sourcePath,
-    stdio: 'pipe',
-  })
-  const createdPath = output.trim().split(/\r?\n/).filter(Boolean).pop()
-  const projectPath = createdPath ? absolutePath(createdPath, sourcePath) : targetPath
-
-  if (project.branch) {
-    const branch = render(project.branch, {
+  const branch =
+    managed?.branch ??
+    render(project.branch, {
       slug: state.slug,
       spaceName: state.spaceName,
       terminalSpaceName: state.terminalSpaceName,
       projectPath,
       ports: state.ports,
     })
-    const existingBranch = spawnSync(
-      'git',
-      ['-C', projectPath, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`],
-      {
-        stdio: 'ignore',
-      },
-    )
-
-    if (existingBranch.status === 0) {
-      run('git', ['-C', projectPath, 'switch', branch])
-    } else {
-      run('git', ['-C', projectPath, 'switch', '-c', branch])
+  const currentBranch = snapshotGit(projectPath, ['branch', '--show-current'])
+  const head = snapshotGit(projectPath, ['rev-parse', 'HEAD'])
+  if (managed) {
+    if (snapshotGit(projectPath, ['status', '--porcelain', '--untracked-files=all'])) {
+      fail(`Incomplete or modified snapshot at ${projectPath}; reconcile it without discarding work.`)
     }
+    if (currentBranch === branch && head === managed.baseSha) {
+      checkpoint.phase = 'ready'
+      saveState(state)
+      return projectPath
+    }
+    if (head !== checkpoint.sourceSha) fail(`Snapshot revision changed during creation: ${projectPath}`)
+    snapshotGit(projectPath, ['switch', '--no-track', '-c', branch, managed.baseSha])
+  } else if (currentBranch !== branch) {
+    snapshotGit(projectPath, ['switch', '-c', branch])
   }
-
+  checkpoint.phase = 'ready'
+  saveState(state)
   return projectPath
+}
+
+function managedSummary(state) {
+  const project = config.projects[0]
+  const projectState = state.projects[project.id]
+  if (!state.managed || projectState?.phase !== 'ready') fail('Managed isolate is not ready.')
+  if (!fs.existsSync(projectState.path)) fail(`Managed isolate is missing: ${projectState.path}`)
+  if (snapshotGit(projectState.path, ['branch', '--show-current']) !== state.managed.branch) {
+    fail('Managed isolate branch changed.')
+  }
+  snapshotGit(projectState.path, ['merge-base', '--is-ancestor', state.managed.baseSha, 'HEAD'])
+  return { slug: state.slug, projectPath: projectState.path, ...state.managed }
 }
 
 function printSummary(state) {
@@ -812,7 +868,7 @@ function ensureIsolateSpace(state) {
 
 function requireIsolateSpace(state) {
   if (!state.macosSpaceId) {
-    fail(`Isolate '${state.slug}' is not open in a native macOS Space. Run: pnpm whey open ${state.slug}`)
+    fail(`Isolate '${state.slug}' is not open in a native macOS Space. Run: bun run whey open ${state.slug}`)
   }
 }
 
@@ -1169,23 +1225,7 @@ function runProjectDestroy(project, state) {
   runProjectLifecycleCommands(project, state, 'destroy')
 }
 
-function parseCreateArgs(args) {
-  const nameParts = []
-  let open = false
-
-  for (const arg of args) {
-    if (arg === '--open') {
-      open = true
-      continue
-    }
-
-    nameParts.push(arg)
-  }
-
-  return { name: nameParts.join(' '), open }
-}
-
-async function cmdCreate(rawName, options = {}) {
+async function cmdCreate(rawName) {
   const slug = slugify(rawName)
 
   if (!slug) {
@@ -1193,6 +1233,15 @@ async function cmdCreate(rawName, options = {}) {
   }
 
   preflight('create')
+  const managedRequested = options.base || options.branch || options.root
+  if (managedRequested && (!options.base || !options.branch || !options.root)) {
+    fail('Managed creation requires --base, --branch, and --root together.')
+  }
+  if (managedRequested && (config.projects.length !== 1 || sourcePathFor(config.projects[0]) !== repoRoot)) {
+    fail('Managed creation requires exactly one project whose source is the target repository.')
+  }
+  if (options.base && !/^[a-f0-9]{40}$/.test(options.base)) fail('--base must be an exact commit SHA.')
+  if (options.branch) snapshotGit(repoRoot, ['check-ref-format', '--branch', options.branch])
 
   const file = stateFile(slug)
   const state = fs.existsSync(file)
@@ -1210,17 +1259,24 @@ async function cmdCreate(rawName, options = {}) {
         windowGroups: {},
       })
 
+  if (managedRequested) {
+    const expected = { baseSha: options.base, branch: options.branch, repo: repoRoot }
+    if (fs.existsSync(file) && JSON.stringify(state.managed) !== JSON.stringify(expected)) {
+      fail('Isolate identity does not match this run.')
+    }
+    state.managed = expected
+    const project = config.projects[0]
+    // Managed directory names are run IDs, independent of a project's interactive naming template.
+    project.riftName = '{slug}'
+    if (state.projects[project.id] && state.projects[project.id].path !== riftPathFor(project, state)) {
+      fail('Isolate path does not match this run.')
+    }
+  }
   await ensureConfiguredPorts(state)
+  saveState(state)
 
   for (const project of config.projects) {
-    if (!state.projects[project.id]) {
-      state.projects[project.id] = {
-        path: createRiftProject(project, state),
-        envFile: '',
-      }
-      saveState(state)
-    }
-
+    createRiftProject(project, state)
     syncProjectEnv(project, state)
   }
 
@@ -1231,9 +1287,63 @@ async function cmdCreate(rawName, options = {}) {
     return
   }
 
-  printSummary(state)
-  console.log()
-  console.log(`Open it with: pnpm whey open ${slug}`)
+  if (options.json) console.log(JSON.stringify(managedSummary(state)))
+  else {
+    printSummary(state)
+    console.log(`Open it with: bun run whey --config ${configPath} open ${slug}`)
+  }
+}
+
+function verifyIsolateDatabase(project, state) {
+  const database = project.database
+  if (!database) fail('Migration hooks require an isolate database declaration.')
+  const projectState = state.projects[project.id]
+  const values = projectEnv(project, state, projectState.path)
+  const url = new URL(values[database.urlEnv])
+  const projectName = values.COMPOSE_PROJECT_NAME
+  const port = String(state.ports[database.portKey])
+  if (
+    !projectName?.endsWith(`-${state.slug}`) ||
+    !['127.0.0.1', 'localhost'].includes(url.hostname) ||
+    url.port !== port
+  ) {
+    fail('Migration URL must target this isolate’s local Postgres port and Compose project.')
+  }
+  const containerId = run(
+    'docker',
+    ['compose', '--env-file', projectState.envFile, '-f', database.composeFile, 'ps', '--quiet', database.service],
+    { cwd: projectState.path, env: { ...process.env, ...values }, stdio: 'pipe' },
+  ).trim()
+  if (!containerId || containerId.includes('\n')) fail('Expected one isolate database container.')
+  const [container] = JSON.parse(run('docker', ['inspect', containerId], { stdio: 'pipe' }))
+  const bindings = container.NetworkSettings.Ports[`${database.containerPort}/tcp`] ?? []
+  if (
+    !container.State.Running ||
+    container.Config.Labels['com.docker.compose.project'] !== projectName ||
+    !bindings.some((binding) => binding.HostPort === port) ||
+    !container.Mounts.some((mount) => mount.Type === 'volume' && mount.Name === `${projectName}_${database.volume}`) ||
+    !container.Config.Env.includes(`POSTGRES_DB=${url.pathname.slice(1)}`)
+  ) {
+    fail('Database container, published port, database name, and volume must belong to this isolate before migrating.')
+  }
+}
+
+async function cmdStart(rawName) {
+  preflight('start')
+  const state = readState(slugify(rawName))
+  if (state.managed) managedSummary(state)
+  for (const project of config.projects) {
+    if (state.projects[project.id]?.phase !== 'ready') fail('Isolate provisioning has not completed.')
+  }
+  await ensureConfiguredPorts(state)
+  syncEnvFiles(state)
+  for (const project of config.projects) {
+    runProjectLifecycleCommands(project, state, 'start')
+    if (project.migrate?.length) {
+      verifyIsolateDatabase(project, state)
+      runProjectLifecycleCommands(project, state, 'migrate')
+    }
+  }
 }
 
 async function cmdOpen(rawName) {
@@ -1255,6 +1365,7 @@ async function cmdOpen(rawName) {
     return
   }
 
+  await cmdStart(slug)
   ensureIsolateSpace(state)
 
   const beforeGhostty = listWindows()
@@ -1276,9 +1387,8 @@ async function cmdOpen(rawName) {
 
 async function cmdStop(rawName) {
   const slug = slugify(rawName)
-  preflight('stop')
-
   const state = readState(slug)
+  preflight('stop', state)
   await ensureConfiguredPorts(state)
   syncEnvFiles(state)
   closeGhosttyWindow(state)
@@ -1295,9 +1405,8 @@ async function cmdStop(rawName) {
 
 async function cmdDestroy(rawName) {
   const slug = slugify(rawName)
-  preflight('destroy')
-
   const state = readState(slug)
+  preflight('destroy', state)
   await ensureConfiguredPorts(state)
   closeGhosttyWindow(state)
   stopIsolateSpace(state)
@@ -1367,11 +1476,14 @@ function cmdList() {
 
 function usage() {
   console.log('Usage:')
-  console.log('  pnpm whey <command> [isolate-name]')
+  console.log('  bun run whey <command> [isolate-name]')
   console.log()
   console.log('Commands:')
-  console.log('  create <isolate-name> [--open]')
+  console.log('  create <isolate-name> [--open] [--base SHA --branch BRANCH --root PATH] [--json]')
+  console.log('  --config PATH           Target repository .whey.jsonc (defaults to current directory).')
+  console.log('  inspect <isolate-name>  Return managed isolate identity as JSON.')
   console.log('                          Create a Rift snapshot, allocate ports, and write isolate env files.')
+  console.log('  start <isolate-name>    Run isolate initialization hooks without opening desktop apps.')
   console.log('  open <isolate-name>     Open the isolate, or switch to it when it is already open.')
   console.log('  stop <isolate-name>     Close isolate windows, remove the native Space, and run stop hooks.')
   console.log('  destroy <isolate-name>  Stop the isolate, remove Docker volumes, Rift snapshot, profiles, and state.')
@@ -1379,7 +1491,7 @@ function usage() {
   console.log('  help                    Show this command reference.')
 }
 
-const [command, ...args] = process.argv.slice(2)
+const [command, ...args] = positionals
 const name = args.join(' ')
 
 switch (command) {
@@ -1389,9 +1501,14 @@ switch (command) {
     break
   case 'create':
     {
-      const createArgs = parseCreateArgs(args)
-      await cmdCreate(createArgs.name, { open: createArgs.open })
+      await cmdCreate(name)
     }
+    break
+  case 'inspect':
+    console.log(JSON.stringify(managedSummary(readState(slugify(name)))))
+    break
+  case 'start':
+    await cmdStart(name)
     break
   case 'open':
     await cmdOpen(name)

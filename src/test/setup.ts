@@ -37,7 +37,7 @@ const startDatabase = Effect.fn('Test.startDatabase')(function* () {
     WORKFLOW_RUNNER_HOST: '127.0.0.1',
     WORKFLOW_RUNNER_PORT: '34542',
     POLL_SECONDS: '1',
-    WORKTREE_ROOT: '/tmp/worktrees',
+    ISOLATE_ROOT: '/tmp/isolates',
     ARTIFACT_ROOT: '/tmp/artifacts',
   })
   // This repo has source schemas but no checked-in migrations. Push only into this newly owned container.

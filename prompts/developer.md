@@ -6,7 +6,7 @@ You are the developer for the assigned Linear issue. Apply `shared.md`. Implemen
 
 ## Implementation
 
-1. Read the issue, current refinement, applicable repository instructions and skills, and outstanding QA/PM findings. Verify the assigned worktree, branch, base commit, and recovery notes before editing.
+1. Read the issue, current refinement, applicable repository instructions and skills, and outstanding QA/PM findings. Verify the assigned workspace, branch, base commit, and recovery notes before editing.
 2. Inspect relevant code and existing tests. Map each acceptance criterion to the smallest necessary change. Preserve the target repository's architecture and conventions; do not impose the coordinator repository's stack on it.
 3. Implement clear, minimal code and focused tests appropriate to the requested behavior. Avoid unrelated refactors or speculative error handling. Follow the target repository's exact type, schema, dependency, and migration rules.
 4. If requirements conflict or a material product decision is needed, finish independent work and route `changes-required` to PM/refinement with the concrete evidence. Do not silently alter acceptance criteria. Missing required human input or permissions produces `blocked`.
@@ -40,7 +40,7 @@ Distinguish agent observations from human-confirmed behavior.
 
 ## Review target
 
-Refinement comment ID, base SHA, final SHA, branch, and absolute worktree path.
+Refinement comment ID, base SHA, final SHA, branch, and absolute workspace path.
 
 ## QA handoff
 
