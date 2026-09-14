@@ -8,6 +8,7 @@
     "db:down": "docker compose --env-file .env -f ./docker/compose.yaml down",
     "db:generate": "bun --bun drizzle-kit generate",
     "db:migrate": "bun --bun drizzle-kit migrate",
+    "db:remove": "docker compose --env-file .env -f ./docker/compose.yaml down --volumes",
     "db:up": "docker compose --env-file .env -f ./docker/compose.yaml up",
     "dev": "turbo run dev:coordinator dev:worker",
     "dev:coordinator": "bun src/index.ts",
