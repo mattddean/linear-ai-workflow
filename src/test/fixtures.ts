@@ -121,6 +121,7 @@ export function fixture(initial = makeRun()) {
   )
   const linear = Linear.of({
     discover: Effect.succeed([state.snapshot.issue]),
+    replies: () => Effect.succeed([]),
     read,
     post: Effect.fn('Test.Linear.post')((input) =>
       Effect.suspend(() => {

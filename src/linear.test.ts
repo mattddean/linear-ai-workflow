@@ -188,3 +188,72 @@ test('discovery queries the exact team and label, paginates, and excludes closed
   expect(issues.map((issue) => issue.id)).toEqual([first.id, second.id])
   expect(requests).toBe(2)
 })
+
+test('replies are paginated from the requested comment thread and retain the full answer', async () => {
+  const f = fixture()
+  const parent = CommentId.make(crypto.randomUUID())
+  const answer = {
+    id: CommentId.make(crypto.randomUUID()),
+    body: 'Ready\nThe device is connected.',
+    createdAt: '2026-01-02T00:00:00Z',
+    user: { id: userId },
+  }
+  let pages = 0
+  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+    fetchImplementation(async (_url, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected JSON request')
+      expect(init.body).toContain('children(first: 100, after: $after)')
+      expect(init.body).toContain(parent)
+      expect(init.body).not.toContain('query Comments(')
+      pages += 1
+      const next = init.body.includes('reply-cursor')
+      return Response.json({
+        data: {
+          comment: {
+            id: parent,
+            issue: { id: f.state.run.issueId, team: { id: settings.teamId } },
+            children: {
+              nodes: next ? [answer] : [],
+              pageInfo: { hasNextPage: !next, endCursor: next ? null : 'reply-cursor' },
+            },
+          },
+        },
+      })
+    }),
+  )
+  const replies = await Effect.runPromise(
+    Effect.flatMap(Linear, (linear) => linear.replies({ issueId: f.state.run.issueId, commentId: parent })).pipe(
+      Effect.provide(LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))),
+      Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
+    ),
+  )
+  expect(replies).toEqual([answer])
+  expect(pages).toBe(2)
+})
+
+test('reply threads belonging to another issue are rejected', async () => {
+  const f = fixture()
+  const parent = CommentId.make(crypto.randomUUID())
+  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+    fetchImplementation(async () =>
+      Response.json({
+        data: {
+          comment: {
+            id: parent,
+            issue: { id: IssueId.make(crypto.randomUUID()), team: { id: settings.teamId } },
+            children: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          },
+        },
+      }),
+    ),
+  )
+  const result = await Effect.runPromise(
+    Effect.flatMap(Linear, (linear) =>
+      linear.replies({ issueId: f.state.run.issueId, commentId: parent }).pipe(Effect.exit),
+    ).pipe(
+      Effect.provide(LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))),
+      Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
+    ),
+  )
+  expect(result._tag).toBe('Failure')
+})

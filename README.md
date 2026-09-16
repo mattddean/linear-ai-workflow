@@ -99,7 +99,7 @@ Before dispatching PM, the coordinator records enrollment in Postgres. Repeated 
 
 Applying `ai-workflow` selects that ticket for local implementation commits and workflow comments. The worker takes queued work automatically as capacity becomes available. The label does not authorize pushing, merging, deployment, or Linear status changes. Removing the label before discovery prevents enrollment. Once a run is enrolled, use its pause control to stop further assignments; removing a label does not interrupt an agent mid-assignment.
 
-When a run needs your input, its comment explains the blocker and includes a question ID. Reply with that ID alone on the first line and your answer on subsequent lines. Prefix the answer with `SCOPE:` when it changes the requirements. The coordinator records the response and resumes the waiting phase. Material scope changes return to PM refinement. Ordinary comments provide context without starting a separate run.
+When a run needs your input, its comment explains the blocker. Use Linear’s Reply action on that comment and write your answer normally; no ID is required. Prefix the answer with `SCOPE:` when it changes the requirements. The coordinator records the response and resumes the waiting phase. Material scope changes return to PM refinement. Replies to older questions and standalone ticket comments provide context but do not resume the waiting run.
 
 ## Operator controls
 

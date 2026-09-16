@@ -3,7 +3,7 @@ import { Effect } from 'effect'
 
 import { Coordinator } from './coordinator'
 import { CommentId } from './domain'
-import { blocked, humanAnswer, questionId, validateResult } from './handoff'
+import { blocked, humanAnswer, validateResult } from './handoff'
 import { fixture, makeRun, ready, sha, userId } from './test/fixtures'
 
 // Verifies role sequencing and recovery gates using fake agents, Linear comments, workspaces, and persistence.
@@ -84,21 +84,26 @@ test('changed requirements route to PM without executing a stale implementation'
   expect(f.state.calls).toBe(1)
 })
 
-test('blocked agent keeps the assigned phase and a correlated question', async () => {
+test('blocked agent asks for a direct reply and accepts its full text without an ID', async () => {
   const f = fixture()
   f.state.agentResult = (run) => blocked(run, 'Please connect the device')
   expect(await execute(f)).toBe('wait')
   expect(f.state.run.phase).toBe('refinement')
   const publication = f.comments[0]
   if (!publication) throw new Error('Expected publication')
+  expect(publication.body).toContain('Reply directly to this comment')
+  expect(publication.body).not.toContain('Q-')
   const answer = {
     id: CommentId.make(crypto.randomUUID()),
-    body: `${questionId({ ...f.state.run, sequence: 0 })}\nReady`,
+    body: 'Ready\nThe device is connected.',
     createdAt: new Date().toISOString(),
     user: { id: userId },
   }
-  expect(humanAnswer({ run: f.state.run, publication, comments: [publication, answer] })?.id).toBe(answer.id)
-  expect(humanAnswer({ run: f.state.run, publication, comments: [{ ...answer, body: 'Ready' }] })).toBeUndefined()
+  expect(humanAnswer({ publication, replies: [answer] })?.body).toBe(answer.body)
+  expect(humanAnswer({ publication, replies: [] })).toBeUndefined()
+  expect(humanAnswer({ publication, replies: [{ ...answer, body: '  ' }, answer] })?.id).toBe(answer.id)
+  expect(humanAnswer({ publication, replies: [{ ...answer, user: null }] })).toBeUndefined()
+  expect(humanAnswer({ publication, replies: [{ ...answer, createdAt: '2000-01-01T00:00:00Z' }] })).toBeUndefined()
 })
 
 test('stale refinement and review commits are rejected', async () => {

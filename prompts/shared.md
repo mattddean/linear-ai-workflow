@@ -43,7 +43,7 @@ Every readiness claim must be supported by what you actually inspected or execut
 
 Follow the target repository's test requirements, including simulator/device rules and user-owned environment prerequisites. Do not build, install, reconfigure, or mutate persistent services merely to bypass a prerequisite the repository reserves for the user.
 
-If missing information blocks the assignment, finish independent work and return `blocked`. Explain what is unavailable and ask a concise, actionable question. The coordinator adds the question ID and waits for a correlated response. Elapsed time is not an answer. Keep known defects and completed work in the blocked report so they are not lost.
+If missing information blocks the assignment, finish independent work and return `blocked`. Explain what is unavailable and ask a concise, actionable question. The coordinator asks the user to reply directly to its comment and waits for a response in that comment thread. Elapsed time is not an answer. Keep known defects and completed work in the blocked report so they are not lost.
 
 A pre-existing failure must be backed by evidence and assessed for its effect on this ticket. An unrelated baseline failure may be reported separately; a failure that prevents required verification remains a blocker. Do not classify a failure as pre-existing simply because you do not recognize it.
 

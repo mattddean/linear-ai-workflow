@@ -3,6 +3,8 @@ import { expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import { Effect, Exit, Layer, Scope } from 'effect'
 
+import type { Comment } from '../domain'
+
 import { DiscoverySettings } from '../config'
 import { CoordinatorLive } from '../coordinator'
 import { Db } from '../db/live'
@@ -13,7 +15,7 @@ import { blocked } from '../handoff'
 import { Linear } from '../linear'
 import { Store, StoreLive } from '../store'
 import { TestDatabaseLive } from '../test/db'
-import { fixture, makeRun, ready } from '../test/fixtures'
+import { fixture, makeRun, ready, userId } from '../test/fixtures'
 import { TicketWorkflow, TicketWorkflowLive } from '../ticket.workflow'
 import { pollRuns } from '../worker'
 import { clientEngineLayer, ensureWorker, workerEngineLayer, workerGroups } from './workflow-engine'
@@ -26,8 +28,21 @@ test.each([...workerGroups])(
     const db = TestDatabaseLive
     const f = fixture({ ...makeRun(), workerGroup: group })
     let shouldBlock = true
-    f.state.agentResult = (run) => (shouldBlock ? blocked(run, 'Confirm test environment') : ready(run))
-    const dependencies = f.dependencies.pipe(
+    const answer = 'Ready\nThe device is connected.'
+    const replyThreads = new Map<CommentId, readonly Comment[]>()
+    f.state.agentResult = (run) => {
+      if (!shouldBlock && run.sequence === 1) expect(run.answer).toBe(group === 'local' ? answer : 'Ready')
+      return shouldBlock ? blocked(run, 'Confirm test environment') : ready(run)
+    }
+    const linear = Linear.of({
+      ...f.linear,
+      replies: (input) =>
+        Effect.sync(() => {
+          expect(input.issueId).toBe(f.state.run.issueId)
+          return replyThreads.get(input.commentId) ?? []
+        }),
+    })
+    const dependencies = Layer.merge(f.dependencies, Layer.succeed(Linear, linear)).pipe(
       Layer.provideMerge(StoreLive),
       Layer.provideMerge(db),
       Layer.provideMerge(BunContext.layer),
@@ -60,9 +75,24 @@ test.each([...workerGroups])(
         yield* Scope.close(scope1, Exit.void)
         shouldBlock = false
         const waiting = yield* get
-        yield* Effect.flatMap(Store, (store) =>
-          store.control({ id: waiting.id, command: 'resume', answer: 'Ready' }),
-        ).pipe(Effect.provide(storeContext))
+        if (group === 'local') {
+          if (waiting.predecessorId === null) throw new Error('Expected a blocker comment')
+          const reply = {
+            id: CommentId.make(crypto.randomUUID()),
+            body: answer,
+            createdAt: new Date().toISOString(),
+            user: { id: userId },
+          }
+          // A standalone ticket comment cannot wake the blocked workflow.
+          f.comments.push(reply)
+          yield* pollRuns(group).pipe(Effect.provide(clientContext), Effect.provide(storeContext))
+          expect((yield* get).status).toBe('blocked')
+          replyThreads.set(waiting.predecessorId, [reply])
+        } else {
+          yield* Effect.flatMap(Store, (store) =>
+            store.control({ id: waiting.id, command: 'resume', answer: 'Ready' }),
+          ).pipe(Effect.provide(storeContext))
+        }
         const scope2 = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
         yield* Layer.buildWithScope(worker, scope2)
         yield* pollRuns(group).pipe(Effect.provide(clientContext), Effect.provide(storeContext))

@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Redacted, Schedule, Schema } from 'effect'
 
-import type { AppError, IssueId, IssueKey, Snapshot } from './domain'
+import type { AppError, CommentId, IssueId, IssueKey, Snapshot } from './domain'
 
 import { Settings } from './config'
 import { Comment, Issue, error } from './domain'
@@ -12,6 +12,7 @@ export class Linear extends Context.Tag('Linear')<
   {
     readonly discover: Effect.Effect<readonly Issue[], AppError>
     readonly read: (id: IssueId | typeof IssueKey.Type) => Effect.Effect<Snapshot, AppError>
+    readonly replies: (input: { issueId: IssueId; commentId: CommentId }) => Effect.Effect<readonly Comment[], AppError>
     readonly post: (input: { issueId: IssueId; body: string; eventMarker: string }) => Effect.Effect<Comment, AppError>
   }
 >() {}
@@ -21,6 +22,13 @@ const Page = Schema.Struct({
 })
 const IssueResponse = Schema.Struct({ issue: Issue })
 const CommentsResponse = Schema.Struct({ issue: Schema.Struct({ comments: Page }) })
+const RepliesResponse = Schema.Struct({
+  comment: Schema.Struct({
+    id: Comment.fields.id,
+    issue: Schema.Struct({ id: Issue.fields.id, team: Issue.fields.team }),
+    children: Page,
+  }),
+})
 const CreatedResponse = Schema.Struct({
   commentCreate: Schema.Struct({ success: Schema.Boolean, comment: Schema.NullOr(Comment) }),
 })
@@ -158,6 +166,31 @@ export const LinearLive = Layer.effect(
         comments: comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
       }
     })
+    const replies = Effect.fn('Linear.replies')(function* (input: { issueId: IssueId; commentId: CommentId }) {
+      const comments: Comment[] = []
+      let after: string | null = null
+      for (;;) {
+        const page: typeof RepliesResponse.Type = yield* readRequest({
+          query: `query Replies($id: String!, $after: String) { comment(id: $id) { id issue { id team { id } } children(first: 100, after: $after) { nodes { ${commentFields} } pageInfo { hasNextPage endCursor } } } }`,
+          variables: { id: input.commentId, after },
+        }).pipe(
+          Effect.flatMap(Schema.decodeUnknown(RepliesResponse)),
+          Effect.mapError(() => error('linear', 'Invalid Linear reply page')),
+        )
+        if (
+          page.comment.id !== input.commentId ||
+          page.comment.issue.id !== input.issueId ||
+          page.comment.issue.team.id !== settings.teamId
+        )
+          return yield* error('linear', 'Reply thread is outside the requested issue or configured team')
+        comments.push(...page.comment.children.nodes)
+        if (!page.comment.children.pageInfo.hasNextPage) break
+        const next = page.comment.children.pageInfo.endCursor
+        if (next === null || next === after) return yield* error('linear', 'Linear reply pagination did not advance')
+        after = next
+      }
+      return comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    })
     const post = Effect.fn('Linear.post')(function* (input) {
       // Reconcile before every attempt, including after an ambiguous successful write.
       const snapshot = yield* read(input.issueId)
@@ -185,6 +218,7 @@ export const LinearLive = Layer.effect(
     })
     return Linear.of({
       discover: discover(),
+      replies,
       read,
       post,
     })

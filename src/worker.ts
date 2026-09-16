@@ -28,8 +28,9 @@ const pollRun = Effect.fn('Worker.pollRun')(function* (run: Run) {
       const snapshot = yield* linear.read(run.issueId)
       const publication = snapshot.comments.find((comment) => comment.id === run.predecessorId)
       if (publication) {
-        const response = humanAnswer({ run, comments: snapshot.comments, publication })
-        if (response) answer = response.body.split('\n').slice(1).join('\n').trim()
+        const replies = yield* linear.replies({ issueId: run.issueId, commentId: publication.id })
+        const response = humanAnswer({ replies, publication })
+        if (response) answer = response.body.trim()
       }
     }
     if (command.resume_requested || (answer !== null && answer.length > 0)) {

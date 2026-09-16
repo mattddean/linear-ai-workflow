@@ -11,7 +11,6 @@ export const roleFor = (phase: Phase): typeof Role.Type =>
 export const fingerprint = (snapshot: Snapshot): string =>
   JSON.stringify([snapshot.issue.title, snapshot.issue.description])
 export const eventId = (run: Run): string => `${run.id}/${run.sequence}`
-export const questionId = (run: Run): string => `Q-${run.id}-${run.sequence}`
 export const marker = (run: Run): string => `<!-- linear-ai-workflow:${eventId(run)} -->`
 
 export const validateResult = Effect.fn('Result.validate')(function* (input: { run: Run; result: Result }) {
@@ -62,21 +61,17 @@ export function blocked(run: Run, message: string): Result {
 }
 
 export function commentBody(run: Run, result: Result): string {
-  return `${marker(run)}\nRun: ${run.id}\nRole: ${roleFor(run.phase)}\nPhase: ${run.phase}\nOutcome: ${result.outcome}\nResponds-To: ${run.predecessorId ?? 'none'}\nSpec: ${result.refinementCommentId ?? 'self/none'}\nCommit: ${result.commitSha ?? 'none'}\nNext: ${result.nextRole ?? 'none'}/${result.nextPhase ?? 'none'}\n\n${result.report}${result.question === null ? '' : `\n\n## Human response required\n\nReply with \`${questionId(run)}\` on the first line, followed by your answer. Start your answer with \`SCOPE:\` if it changes the requirements.\n\n${result.question}`}`
+  return `${marker(run)}\nRun: ${run.id}\nRole: ${roleFor(run.phase)}\nPhase: ${run.phase}\nOutcome: ${result.outcome}\nResponds-To: ${run.predecessorId ?? 'none'}\nSpec: ${result.refinementCommentId ?? 'self/none'}\nCommit: ${result.commitSha ?? 'none'}\nNext: ${result.nextRole ?? 'none'}/${result.nextPhase ?? 'none'}\n\n${result.report}${result.question === null ? '' : `\n\n## Human response required\n\nReply directly to this comment with your answer. Start your answer with \`SCOPE:\` if it changes the requirements.\n\n${result.question}`}`
 }
 
-export function humanAnswer(input: {
-  run: Run
-  comments: readonly Comment[]
-  publication: Comment
-}): Comment | undefined {
-  const { run, comments, publication } = input
-  return comments.find(
+export function humanAnswer(input: { replies: readonly Comment[]; publication: Comment }): Comment | undefined {
+  const { replies, publication } = input
+  return replies.find(
     (comment) =>
       comment.id !== publication.id &&
       comment.user !== null &&
       Date.parse(comment.createdAt) >= Date.parse(publication.createdAt) &&
-      comment.body.split('\n')[0]?.trim() === questionId({ ...run, sequence: run.waitSequence ?? run.sequence }),
+      comment.body.trim().length > 0,
   )
 }
 
