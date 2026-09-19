@@ -1,15 +1,29 @@
+import { FetchHttpClient } from '@effect/platform'
 import { expect, spyOn, test } from 'bun:test'
 import { Cause, Effect, Layer, Schema } from 'effect'
 
 import { Settings } from './config'
 import { CommentId, IssueId } from './domain'
-import { Linear, LinearLive } from './linear'
+import { GraphQLClientLive } from './graphql-client'
+import { Linear, LinearLive } from './linear.api'
 import { fixture, settings, userId } from './test/fixtures'
 
 // Verifies Linear pagination, publication reconciliation, and GraphQL error handling with mocked HTTP responses.
 
+const transportLayer = GraphQLClientLive('https://api.linear.app/graphql', settings.linearKey).pipe(
+  Layer.provide(FetchHttpClient.layer),
+)
+const testLayer = LinearLive.pipe(Layer.provide(transportLayer), Layer.provide(Layer.succeed(Settings, settings)))
+
 const fetchImplementation = (handler: (...args: Parameters<typeof fetch>) => Promise<Response>) =>
-  Object.assign(handler, { preconnect: fetch.preconnect })
+  Object.assign(
+    (url: Parameters<typeof fetch>[0], init?: RequestInit) =>
+      handler(url, {
+        ...init,
+        body: init?.body instanceof Uint8Array ? new TextDecoder().decode(init.body) : (init?.body ?? null),
+      }),
+    { preconnect: fetch.preconnect },
+  )
 
 test('Linear adapter paginates comments and reconciles a published event without another mutation', async () => {
   const f = fixture()
@@ -49,7 +63,7 @@ test('Linear adapter paginates comments and reconciles a published event without
       })
     }),
   )
-  const layer = LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))
+  const layer = testLayer
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const linear = yield* Linear
@@ -79,10 +93,7 @@ test('GraphQL errors with HTTP 200 cannot be mistaken for success', async () => 
     Effect.gen(function* () {
       const linear = yield* Linear
       return yield* linear.read(f.state.run.issueId).pipe(Effect.exit)
-    }).pipe(
-      Effect.provide(LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))),
-      Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
-    ),
+    }).pipe(Effect.provide(testLayer), Effect.ensuring(Effect.sync(() => fetchMock.mockRestore()))),
   )
   expect(result._tag).toBe('Failure')
   if (result._tag === 'Failure')
@@ -139,10 +150,7 @@ test('comment creation preserves native Linear request and response properties',
   const result = await Effect.runPromise(
     Effect.flatMap(Linear, (linear) =>
       linear.post({ issueId: f.state.run.issueId, body: comment.body, eventMarker: '<!-- new-event -->' }),
-    ).pipe(
-      Effect.provide(LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))),
-      Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
-    ),
+    ).pipe(Effect.provide(testLayer), Effect.ensuring(Effect.sync(() => fetchMock.mockRestore()))),
   )
   expect(result).toEqual(comment)
   expect(published).toBe(true)
@@ -192,7 +200,7 @@ test('discovery queries the exact team and label, paginates, and excludes closed
   )
   const issues = await Effect.runPromise(
     Effect.flatMap(Linear, (linear) => linear.discover).pipe(
-      Effect.provide(LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))),
+      Effect.provide(testLayer),
       Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
     ),
   )
@@ -234,7 +242,7 @@ test('replies are paginated from the requested comment thread and retain the ful
   )
   const replies = await Effect.runPromise(
     Effect.flatMap(Linear, (linear) => linear.replies({ issueId: f.state.run.issueId, commentId: parent })).pipe(
-      Effect.provide(LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))),
+      Effect.provide(testLayer),
       Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
     ),
   )
@@ -261,10 +269,7 @@ test('reply threads belonging to another issue are rejected', async () => {
   const result = await Effect.runPromise(
     Effect.flatMap(Linear, (linear) =>
       linear.replies({ issueId: f.state.run.issueId, commentId: parent }).pipe(Effect.exit),
-    ).pipe(
-      Effect.provide(LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))),
-      Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
-    ),
+    ).pipe(Effect.provide(testLayer), Effect.ensuring(Effect.sync(() => fetchMock.mockRestore()))),
   )
   expect(result._tag).toBe('Failure')
 })
@@ -339,10 +344,7 @@ test.each([false, true])('acknowledgements resolve nested reply=%s to its root a
       }
       expect(yield* linear.post(input)).toEqual(comment)
       expect(yield* linear.post(input)).toEqual(comment)
-    }).pipe(
-      Effect.provide(LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))),
-      Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
-    ),
+    }).pipe(Effect.provide(testLayer), Effect.ensuring(Effect.sync(() => fetchMock.mockRestore()))),
   )
   expect(writes).toBe(1)
 })

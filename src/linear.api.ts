@@ -1,9 +1,10 @@
-import { Context, Effect, Layer, Redacted, Schedule, Schema } from 'effect'
+import { Context, Effect, Layer, Schedule, Schema } from 'effect'
 
 import type { AppError, CommentId, IssueId, IssueKey, Snapshot } from './domain'
 
 import { Settings } from './config'
 import { Comment, Issue, error } from './domain'
+import { GraphQLClient } from './graphql-client'
 
 // Reads team-scoped issues and paginated comments, and reconciles comment publication through Linear’s GraphQL API.
 
@@ -56,81 +57,28 @@ const DiscoveryResponse = Schema.Struct({
     pageInfo: Page.fields.pageInfo,
   }),
 })
-const Envelope = Schema.Struct({
-  errors: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        message: Schema.String,
-        extensions: Schema.optional(Schema.Struct({ userPresentableMessage: Schema.optional(Schema.String) })),
-      }),
-    ),
-  ),
-  data: Schema.optional(Schema.Unknown),
-})
 const commentFields = 'id body createdAt user { id }'
 
 export const LinearLive = Layer.effect(
   Linear,
   Effect.gen(function* () {
     const settings = yield* Settings
-    const request = Effect.fn('Linear.request')(function* (input: {
-      query: string
-      variables: Readonly<Record<string, string | null>>
-    }) {
-      const response = yield* Effect.tryPromise({
-        try: (signal) =>
-          fetch('https://api.linear.app/graphql', {
-            method: 'POST',
-            signal,
-            headers: { Authorization: Redacted.value(settings.linearKey), 'Content-Type': 'application/json' },
-            body: JSON.stringify(input),
-          }),
-        catch: () => error('transport', 'Linear request failed; publication may need reconciliation'),
-      }).pipe(
-        Effect.timeoutFail({
-          duration: '30 seconds',
-          onTimeout: () => error('transport', 'Linear request timed out; reconcile before retrying'),
-        }),
-      )
-      if (response.status === 429) {
-        const seconds = Number(response.headers.get('retry-after'))
-        yield* Effect.sleep(`${Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 300) : 30} seconds`)
-        return yield* error('transport', 'Linear rate limit reached')
-      }
-      if (!response.ok)
-        return yield* error(response.status >= 500 ? 'transport' : 'linear', `Linear returned HTTP ${response.status}`)
-      const text = yield* Effect.tryPromise({
-        try: () => response.text(),
-        catch: () => error('transport', 'Unable to read Linear response'),
-      }).pipe(
-        Effect.timeoutFail({
-          duration: '30 seconds',
-          onTimeout: () => error('transport', 'Linear response body timed out'),
-        }),
-      )
-      const envelope = yield* Schema.decodeUnknown(Schema.parseJson(Envelope))(text).pipe(
-        Effect.mapError(() => error('linear', 'Invalid Linear response')),
-      )
-      if (envelope.errors?.length)
-        return yield* error(
-          'linear',
-          `Linear GraphQL: ${envelope.errors.map((item) => item.extensions?.userPresentableMessage ?? item.message).join('; ')}`,
-        )
-      return envelope.data
-    })
-    const readRequest = (input: Parameters<typeof request>[0]) =>
+    const { execute: request } = yield* GraphQLClient
+    const readRequest: typeof request = Effect.fn('Linear.readRequest')((input) =>
       request(input).pipe(
         Effect.retry({
           schedule: Schedule.exponential('1 second').pipe(Schedule.intersect(Schedule.recurs(2))),
           while: (failure) => failure.kind === 'transport',
         }),
-      )
+      ),
+    )
     const discover = Effect.fn('Linear.discover')(
       function* () {
         const issues: Issue[] = []
         let after: string | null = null
         for (;;) {
           const page: typeof DiscoveryResponse.Type = yield* readRequest({
+            schema: DiscoveryResponse,
             query: `query Discover($teamId: ID!, $after: String) {
             issues(first: 100, after: $after, includeArchived: false, filter: {
               team: { id: { eq: $teamId } }, labels: { name: { eq: "ai-workflow" } },
@@ -141,7 +89,7 @@ export const LinearLive = Layer.effect(
             }
           }`,
             variables: { teamId: settings.teamId, after },
-          }).pipe(Effect.flatMap(Schema.decodeUnknown(DiscoveryResponse)))
+          })
           for (const issue of page.issues.nodes) {
             if (issue.team.id !== settings.teamId)
               return yield* error('linear', 'Discovered issue is outside the configured team')
@@ -158,28 +106,21 @@ export const LinearLive = Layer.effect(
       Effect.mapError((failure) => error('linear', `Ticket discovery failed: ${failure.message}`)),
     )
     const read = Effect.fn('Linear.read')(function* (id: IssueId | typeof IssueKey.Type) {
-      const data = yield* readRequest({
+      const { issue } = yield* readRequest({
+        schema: IssueResponse,
         query: 'query Issue($id: String!) { issue(id: $id) { id identifier title description updatedAt team { id } } }',
         variables: { id },
       })
-      const { issue } = yield* Schema.decodeUnknown(IssueResponse)(data).pipe(
-        Effect.mapError(() => error('linear', 'Issue is unavailable or malformed')),
-      )
       if (issue.team.id !== settings.teamId)
         return yield* error('linear', 'Issue is outside the configured Linear team')
       const comments: Comment[] = []
       let after: string | null = null
       for (;;) {
         const page: typeof CommentsResponse.Type = yield* readRequest({
+          schema: CommentsResponse,
           query: `query Comments($id: String!, $after: String) { issue(id: $id) { comments(first: 100, after: $after) { nodes { ${commentFields} } pageInfo { hasNextPage endCursor } } } }`,
           variables: { id: issue.id, after },
-        }).pipe(
-          Effect.flatMap((data) =>
-            Schema.decodeUnknown(CommentsResponse)(data).pipe(
-              Effect.mapError(() => error('linear', 'Invalid Linear comment page')),
-            ),
-          ),
-        )
+        })
         comments.push(...page.issue.comments.nodes)
         if (!page.issue.comments.pageInfo.hasNextPage) break
         const next = page.issue.comments.pageInfo.endCursor
@@ -196,15 +137,10 @@ export const LinearLive = Layer.effect(
       let after: string | null = null
       for (;;) {
         const page: typeof RepliesResponse.Type = yield* readRequest({
+          schema: RepliesResponse,
           query: `query Replies($id: String!, $after: String) { comment(id: $id) { id issue { id team { id } } children(first: 100, after: $after) { nodes { ${commentFields} } pageInfo { hasNextPage endCursor } } } }`,
           variables: { id: input.commentId, after },
-        }).pipe(
-          Effect.flatMap((data) =>
-            Schema.decodeUnknown(RepliesResponse)(data).pipe(
-              Effect.mapError(() => error('linear', 'Invalid Linear reply page')),
-            ),
-          ),
-        )
+        })
         if (
           page.comment.id !== input.commentId ||
           page.comment.issue.id !== input.issueId ||
@@ -223,13 +159,11 @@ export const LinearLive = Layer.effect(
       issueId: IssueId
       commentId: CommentId
     }) {
-      const data = yield* readRequest({
+      const { comment } = yield* readRequest({
+        schema: ThreadResponse,
         query: 'query Thread($id: String!) { comment(id: $id) { id parent { id } issue { id team { id } } } }',
         variables: { id: input.commentId },
       })
-      const { comment } = yield* Schema.decodeUnknown(ThreadResponse)(data).pipe(
-        Effect.mapError(() => error('linear', 'Invalid Linear comment thread')),
-      )
       if (
         comment.id !== input.commentId ||
         comment.issue.id !== input.issueId ||
@@ -252,13 +186,11 @@ export const LinearLive = Layer.effect(
           return yield* error('linear', 'Event marker exists with a different body; human reconciliation required')
         return existing
       }
-      const data = yield* request({
+      const created = yield* request({
+        schema: CreatedResponse,
         query: `mutation Comment($issueId: String!, $body: String!, $parentId: String) { commentCreate(input: { issueId: $issueId, body: $body, parentId: $parentId }) { success comment { ${commentFields} } } }`,
         variables: { issueId: input.issueId, body: input.body, parentId },
       })
-      const created = yield* Schema.decodeUnknown(CreatedResponse)(data).pipe(
-        Effect.mapError(() => error('linear', 'Invalid comment creation result; reconcile before retrying')),
-      )
       if (!created.commentCreate.success || created.commentCreate.comment === null)
         return yield* error('linear', 'Linear did not confirm comment creation')
       // Fetch the persisted handoff rather than trusting an agent's draft or mutation echo.

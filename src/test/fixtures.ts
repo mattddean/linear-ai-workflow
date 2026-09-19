@@ -18,7 +18,7 @@ import {
   WorkerId,
   error,
 } from '../domain'
-import { Linear } from '../linear'
+import { Linear } from '../linear.api'
 import { Store } from '../store'
 import { Workspace } from '../workspace'
 

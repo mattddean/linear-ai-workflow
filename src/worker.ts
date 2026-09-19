@@ -11,7 +11,7 @@ import { Db } from './db/live'
 import { workflow_runs, workflow_worker_owners } from './db/schema'
 import { error } from './domain'
 import { humanAnswer } from './handoff'
-import { Linear } from './linear'
+import { Linear } from './linear.api'
 import { Store, controls } from './store'
 import { TicketWorkflow, resumeSignal } from './ticket.workflow'
 
