@@ -7,7 +7,7 @@ import { Settings, SettingsLive } from '../../config'
 import { CoordinatorLive } from '../../coordinator'
 import { DatabaseLive } from '../../db/live'
 import { GraphQLClientLive } from '../../graphql-client'
-import { LinearLive } from '../../linear.api'
+import { LinearLive } from '../../linear.client'
 import { StoreLive } from '../../store'
 import { WorkspaceLive } from '../../workspace'
 

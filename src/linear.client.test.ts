@@ -5,7 +5,7 @@ import { Cause, Effect, Layer, Schema } from 'effect'
 import { Settings } from './config'
 import { CommentId, IssueId } from './domain'
 import { GraphQLClientLive } from './graphql-client'
-import { Linear, LinearLive } from './linear.api'
+import { Linear, LinearLive } from './linear.client'
 import { fixture, settings, userId } from './test/fixtures'
 
 // Verifies Linear pagination, publication reconciliation, and GraphQL error handling with mocked HTTP responses.

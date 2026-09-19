@@ -6,7 +6,7 @@ import type { Issue, Run } from './domain'
 import { Settings, DiscoverySettings } from './config'
 import { Branch, Path, RunId } from './domain'
 import { fingerprint } from './handoff'
-import { Linear } from './linear.api'
+import { Linear } from './linear.client'
 import { Store } from './store'
 import { Workspace } from './workspace'
 

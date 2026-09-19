@@ -16,7 +16,7 @@ import {
   roleFor,
   validateResult,
 } from './handoff'
-import { Linear } from './linear.api'
+import { Linear } from './linear.client'
 import { Store } from './store'
 import { budgetTokens, countTokenUsage } from './token-usage'
 import { Workspace } from './workspace'
