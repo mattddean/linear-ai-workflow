@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { eq, inArray } from 'drizzle-orm'
-import { Effect, Layer } from 'effect'
+import { Effect } from 'effect'
 
 import { DiscoverySettings } from './config'
 import { Db } from './db/live'
@@ -11,6 +11,7 @@ import { Linear } from './linear.client'
 import { Store } from './store'
 import { TestStoreLive } from './test/db'
 import { fixture, makeRun, settings, sha } from './test/fixtures'
+import { testRuntime } from './test/runtime/root'
 import { Workspace } from './workspace'
 
 // Verifies automatic discovery, cross-session enrollment, and restart behavior using real persisted database rows.
@@ -50,8 +51,7 @@ test('discovery persists configured work offline and picks up labels added on a 
     ...f.workspace,
     inspectBase: (target) => Effect.sync(() => ({ repo: target.repo, baseSha })),
   })
-  const dependencies = f.dependencies.pipe(Layer.provideMerge(TestStoreLive))
-  await Effect.runPromise(
+  await testRuntime.runPromise(
     Effect.gen(function* () {
       const db = yield* Db
       const store = yield* Store
@@ -98,7 +98,7 @@ test('discovery persists configured work offline and picks up labels added on a 
       Effect.provideService(Linear, { ...f.linear, discover: Effect.sync(() => [...issues]) }),
       Effect.provideService(Workspace, workspace),
       Effect.provideService(DiscoverySettings, { repo: f.state.run.repo, base: Branch.make('main') }),
-      Effect.provide(dependencies),
+      Effect.provide(f.dependencies),
     ),
   )
 })
@@ -111,7 +111,7 @@ test('watcher retries failed discovery and finds tickets that arrive after start
     if (scans === 1) return Effect.fail(error('transport', 'Temporary Linear outage'))
     return Effect.succeed(scans === 2 ? [] : [f.state.snapshot.issue])
   })
-  await Effect.runPromise(
+  await testRuntime.runPromise(
     Effect.gen(function* () {
       const db = yield* Db
       const store = yield* Store
@@ -130,7 +130,7 @@ test('watcher retries failed discovery and finds tickets that arrive after start
       Effect.scoped,
       Effect.provideService(Linear, { ...f.linear, discover }),
       Effect.provideService(DiscoverySettings, { repo: f.state.run.repo, base: Branch.make('main') }),
-      Effect.provide(f.dependencies.pipe(Layer.provideMerge(TestStoreLive))),
+      Effect.provide(f.dependencies),
       Effect.timeout('5 seconds'),
     ),
   )

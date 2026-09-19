@@ -3,7 +3,7 @@ import { Effect } from 'effect'
 import { mkdir } from 'node:fs/promises'
 
 import { Settings } from './config'
-import { rootRuntime } from './runtime/layers/root'
+import { rootRuntime } from './runtime/root'
 import { acquireWorkerLock } from './worker'
 import { registerWorkflows } from './workflows'
 

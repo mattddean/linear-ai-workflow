@@ -215,3 +215,8 @@ export function fixture(initial = makeRun()) {
   const layer = Coordinator.layer.pipe(Layer.provide(dependencies), Layer.provide(Layer.succeed(Store, store)))
   return { state, comments, acknowledgements, store, linear, agent, workspace, dependencies, layer }
 }
+
+// Capture this test's fakes while leaving the real Store supplied by the calling runtime or scope.
+export function coordinatorLayer(f: ReturnType<typeof fixture>): Layer.Layer<Coordinator, never, Store> {
+  return Coordinator.layer.pipe(Layer.provide(f.dependencies))
+}

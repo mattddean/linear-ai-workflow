@@ -2,7 +2,7 @@ import { BunServices, BunRuntime } from '@effect/platform-bun'
 import { Effect, Layer } from 'effect'
 import { Command } from 'effect/unstable/cli'
 
-import { rootRuntime } from './runtime/layers/root'
+import { rootRuntime } from './runtime/root'
 import { statusCommand, listCommand, pauseCommand, resumeCommand } from './ticket.command'
 
 // Composes feature commands at the CLI process boundary and disposes the shared root runtime on exit.

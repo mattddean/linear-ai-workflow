@@ -7,8 +7,9 @@ import type { Journal } from './domain'
 import { Db } from './db/live'
 import { workflow_runs, workflow_assignments } from './db/schema'
 import { Store, controls } from './store'
-import { TestDatabaseLive, TestStoreLive } from './test/db'
+import { TestDatabaseLive } from './test/db'
 import { fixture, makeRun, ready } from './test/fixtures'
+import { testRuntime } from './test/runtime/root'
 
 // Verifies the production store’s constraints, transactions, and control flags by reading real persisted rows.
 
@@ -48,7 +49,7 @@ test('handoff transaction rolls back its journal when the run update conflicts',
     elapsedMillis: 0,
     stepResult: 'continue',
   }
-  await Effect.runPromise(
+  await testRuntime.runPromise(
     Effect.gen(function* () {
       const store = yield* Store
       yield* store.create({ ...run, status: 'approved' })
@@ -79,13 +80,13 @@ test('handoff transaction rolls back its journal when the run update conflicts',
 
       expect(yield* store.get(run.id)).toEqual(run)
       yield* store.save({ ...run, status: 'approved' })
-    }).pipe(Effect.provide(Store.layer.pipe(Layer.provideMerge(TestDatabaseLive)))),
+    }),
   )
 }, 15000)
 
 test('pause, resume, and acknowledgement persist their control flags', async () => {
   const run = makeRun()
-  await Effect.runPromise(
+  await testRuntime.runPromise(
     Effect.gen(function* () {
       const store = yield* Store
       const db = yield* Db
@@ -104,6 +105,6 @@ test('pause, resume, and acknowledgement persist their control flags', async () 
       yield* store.acknowledge(run.id)
       expect((yield* row())[0]).toMatchObject({ pause_requested: false, resume_requested: false, resume_answer: null })
       yield* store.save({ ...run, status: 'approved' })
-    }).pipe(Effect.provide(TestStoreLive)),
+    }),
   )
 })
