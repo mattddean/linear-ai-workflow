@@ -4,7 +4,7 @@ import type { Assignment, Comment, Journal, Run, Result, Snapshot } from '../dom
 
 import { Agent } from '../agent'
 import { Settings } from '../config'
-import { CoordinatorLive } from '../coordinator'
+import { Coordinator } from '../coordinator'
 import {
   CommentId,
   IssueId,
@@ -212,6 +212,6 @@ export function fixture(initial = makeRun()) {
     Layer.succeed(Settings, settings),
     Layer.succeed(Linear, linear),
   )
-  const layer = CoordinatorLive.pipe(Layer.provide(dependencies), Layer.provide(Layer.succeed(Store, store)))
+  const layer = Coordinator.layer.pipe(Layer.provide(dependencies), Layer.provide(Layer.succeed(Store, store)))
   return { state, comments, acknowledgements, store, linear, agent, workspace, dependencies, layer }
 }

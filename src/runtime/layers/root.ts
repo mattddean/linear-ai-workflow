@@ -1,29 +1,29 @@
-import { FetchHttpClient } from '@effect/platform'
-import { BunContext } from '@effect/platform-bun'
+import { BunServices } from '@effect/platform-bun'
 import { Effect, Layer, ManagedRuntime } from 'effect'
+import { FetchHttpClient } from 'effect/unstable/http'
 
-import { AgentLive } from '../../agent'
-import { Settings, SettingsLive } from '../../config'
-import { CoordinatorLive } from '../../coordinator'
+import { Agent } from '../../agent'
+import { Settings } from '../../config'
+import { Coordinator } from '../../coordinator'
 import { DatabaseLive } from '../../db/live'
-import { GraphQLClientLive } from '../../graphql-client'
-import { LinearLive } from '../../linear.client'
-import { StoreLive } from '../../store'
-import { WorkspaceLive } from '../../workspace'
+import { GraphQLClient } from '../../graphql-client'
+import { Linear } from '../../linear.client'
+import { Store } from '../../store'
+import { Workspace } from '../../workspace'
 
 // Composes shared process services into RootLayer and the single managed rootRuntime.
 
-const BaseLayer = Layer.mergeAll(DatabaseLive, SettingsLive, BunContext.layer)
-const LinearTransportLayer = Layer.unwrapEffect(
-  Effect.map(Settings, (settings) => GraphQLClientLive('https://api.linear.app/graphql', settings.linearKey)),
-).pipe(Layer.provide(Layer.merge(SettingsLive, FetchHttpClient.layer)))
+const BaseLayer = Layer.mergeAll(DatabaseLive, Settings.layer, BunServices.layer)
+const LinearTransportLayer = Layer.unwrap(
+  Effect.map(Settings, (settings) => GraphQLClient.layer('https://api.linear.app/graphql', settings.linearKey)),
+).pipe(Layer.provide(Layer.merge(Settings.layer, FetchHttpClient.layer)))
 const ServicesLayer = Layer.mergeAll(
-  StoreLive,
-  WorkspaceLive,
-  LinearLive.pipe(Layer.provide(LinearTransportLayer)),
-  AgentLive,
+  Store.layer,
+  Workspace.layer,
+  Linear.layer.pipe(Layer.provide(LinearTransportLayer)),
+  Agent.layer,
 ).pipe(Layer.provideMerge(BaseLayer))
-export const RootLayer = CoordinatorLive.pipe(Layer.provideMerge(ServicesLayer))
+export const RootLayer = Coordinator.layer.pipe(Layer.provideMerge(ServicesLayer))
 
 // Share services within each process; its boundary disposes this runtime on exit.
 export const rootRuntime = ManagedRuntime.make(RootLayer)

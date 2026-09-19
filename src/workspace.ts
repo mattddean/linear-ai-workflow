@@ -77,7 +77,7 @@ const whey = Effect.fn('Workspace.whey')(function* (run: Run, command: 'create' 
         Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
       )
       if (code !== 0) return yield* error('blocked', `Whey ${command} failed: ${stderr.trim()}`)
-      const isolate = yield* Schema.decodeUnknown(Schema.parseJson(Isolate))(stdout).pipe(
+      const isolate = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Isolate))(stdout).pipe(
         Effect.mapError(() => error('workspace', 'Whey returned invalid isolate metadata')),
       )
       if (
@@ -93,7 +93,7 @@ const whey = Effect.fn('Workspace.whey')(function* (run: Run, command: 'create' 
   )
 })
 
-export class Workspace extends Context.Tag('Workspace')<
+export class Workspace extends Context.Service<
   Workspace,
   {
     readonly inspectBase: (input: {
@@ -103,45 +103,46 @@ export class Workspace extends Context.Tag('Workspace')<
     readonly prepare: (run: Run) => Effect.Effect<void, AppError>
     readonly inspect: (run: Run) => Effect.Effect<CommitSha, AppError>
   }
->() {}
-export const WorkspaceLive = Layer.succeed(
-  Workspace,
-  Workspace.of({
-    inspectBase: Effect.fn('Workspace.inspectBase')(function* (input) {
-      const repo = yield* Effect.tryPromise({
-        try: () => realpath(input.repo),
-        catch: () => error('workspace', 'Repository path does not exist'),
-      })
-      const root = yield* git({ cwd: Path.make(repo), args: ['rev-parse', '--show-toplevel'] })
-      const base = yield* git({
-        cwd: Path.make(root),
-        args: ['rev-parse', '--verify', '--end-of-options', `${input.base}^{commit}`],
-      })
-      return {
-        repo: Path.make(root),
-        baseSha: yield* Schema.decodeUnknown(CommitSha)(base).pipe(
-          Effect.mapError(() => error('workspace', 'Expected a SHA-1 Git repository')),
-        ),
-      }
-    }),
-    prepare: Effect.fn('Workspace.prepare')(function* (run) {
-      yield* whey(run, 'create')
-    }),
-    inspect: Effect.fn('Workspace.inspect')(function* (run) {
-      yield* whey(run, 'inspect')
-      const branch = yield* git({ cwd: run.workspace, args: ['branch', '--show-current'] })
-      if (branch !== run.branch) return yield* error('workspace', 'Workspace branch changed')
-      const dirty = yield* git({ cwd: run.workspace, args: ['status', '--porcelain', '--untracked-files=all'] })
-      if (dirty)
-        return yield* error(
-          'blocked',
-          `Workspace has uncommitted files. Reconcile ${run.workspace} without discarding work, then resume.`,
+>()('linear-ai-workflow/workspace/Workspace') {
+  static readonly layer = Layer.succeed(
+    Workspace,
+    Workspace.of({
+      inspectBase: Effect.fn('Workspace.inspectBase')(function* (input) {
+        const repo = yield* Effect.tryPromise({
+          try: () => realpath(input.repo),
+          catch: () => error('workspace', 'Repository path does not exist'),
+        })
+        const root = yield* git({ cwd: Path.make(repo), args: ['rev-parse', '--show-toplevel'] })
+        const base = yield* git({
+          cwd: Path.make(root),
+          args: ['rev-parse', '--verify', '--end-of-options', `${input.base}^{commit}`],
+        })
+        return {
+          repo: Path.make(root),
+          baseSha: yield* Schema.decodeUnknownEffect(CommitSha)(base).pipe(
+            Effect.mapError(() => error('workspace', 'Expected a SHA-1 Git repository')),
+          ),
+        }
+      }),
+      prepare: Effect.fn('Workspace.prepare')(function* (run) {
+        yield* whey(run, 'create')
+      }),
+      inspect: Effect.fn('Workspace.inspect')(function* (run) {
+        yield* whey(run, 'inspect')
+        const branch = yield* git({ cwd: run.workspace, args: ['branch', '--show-current'] })
+        if (branch !== run.branch) return yield* error('workspace', 'Workspace branch changed')
+        const dirty = yield* git({ cwd: run.workspace, args: ['status', '--porcelain', '--untracked-files=all'] })
+        if (dirty)
+          return yield* error(
+            'blocked',
+            `Workspace has uncommitted files. Reconcile ${run.workspace} without discarding work, then resume.`,
+          )
+        const head = yield* git({ cwd: run.workspace, args: ['rev-parse', 'HEAD'] })
+        yield* git({ cwd: run.workspace, args: ['merge-base', '--is-ancestor', run.baseSha, 'HEAD'] })
+        return yield* Schema.decodeUnknownEffect(CommitSha)(head).pipe(
+          Effect.mapError(() => error('workspace', 'Invalid workspace HEAD')),
         )
-      const head = yield* git({ cwd: run.workspace, args: ['rev-parse', 'HEAD'] })
-      yield* git({ cwd: run.workspace, args: ['merge-base', '--is-ancestor', run.baseSha, 'HEAD'] })
-      return yield* Schema.decodeUnknown(CommitSha)(head).pipe(
-        Effect.mapError(() => error('workspace', 'Invalid workspace HEAD')),
-      )
+      }),
     }),
-  }),
-)
+  )
+}

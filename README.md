@@ -244,7 +244,7 @@ Run limits bound autonomous retries. Exhaustion produces a blocked comment with 
 
 ## Development
 
-The application uses Bun, TypeScript, Effect, Effect Workflow, and Postgres. Turbo starts the long-running coordinator and workflow worker through `bun run dev`. Operator controls use `@effect/cli`: domain-owned `*.command.ts` files are composed in `src/commands.ts`. Domain `*.workflow.ts` files are registered through `src/workflows/index.ts`. Tests are co-located with source; shared helpers and layers live in `src/test/`. `src/runtime/layers/root.ts` exports the shared `RootLayer` and `rootRuntime`, which each process disposes when it exits. Application queries use Drizzle’s native Effect Postgres adapter in `src/db/live.ts`. Linear integration, agent execution, workspace management, and durable orchestration are separate services composed at the process boundary.
+The application uses Bun, TypeScript, Effect v4, Effect Workflow, and Postgres. Turbo starts the long-running coordinator and workflow worker through `bun run dev`. Operator controls use `effect/unstable/cli`: domain-owned `*.command.ts` files are composed in `src/commands.ts`. Domain `*.workflow.ts` files are registered through `src/workflows/index.ts`. Tests are co-located with source; shared helpers and layers live in `src/test/`. `src/runtime/layers/root.ts` exports the shared `RootLayer` and `rootRuntime`, which each process disposes when it exits. Application queries use Drizzle’s native Effect Postgres adapter in `src/db/live.ts`. Linear integration, agent execution, workspace management, and durable orchestration are separate services composed at the process boundary.
 
 ```sh
 bun run format:fix

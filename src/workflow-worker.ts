@@ -16,13 +16,13 @@ const runWorker = Effect.fn('Worker.run')(function* () {
   yield* Effect.logInfo(
     `Serving ${settings.workerGroup} on ${settings.runnerHost}:${settings.runnerPort}; model gpt-6-astra`,
   )
-  yield* registerWorkflows(settings.workerGroup).pipe(Effect.zipRight(Effect.never), Effect.raceFirst(heartbeat))
+  yield* registerWorkflows(settings.workerGroup).pipe(Effect.andThen(Effect.never), Effect.raceFirst(heartbeat))
 })
 
-runWorker().pipe(
+rootRuntime.contextEffect.pipe(
+  Effect.flatMap((context) => runWorker().pipe(Effect.provide(context))),
   Effect.scoped,
-  Effect.provide(rootRuntime),
-  Effect.tapErrorCause(Effect.logError),
+  Effect.tapCause(Effect.logError),
   Effect.ensuring(rootRuntime.disposeEffect),
   BunRuntime.runMain,
 )

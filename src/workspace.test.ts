@@ -6,7 +6,7 @@ import { join } from 'node:path'
 
 import { Branch, CommitSha, Path } from './domain'
 import { makeRun } from './test/fixtures'
-import { Workspace, WorkspaceLive } from './workspace'
+import { Workspace } from './workspace'
 
 // Exercises real Git snapshots and Whey's CLI with a controllable Rift copy process, including interrupted provisioning.
 
@@ -92,11 +92,11 @@ fi
   }
   const prepare = () =>
     Effect.runPromise(
-      Effect.flatMap(Workspace, (workspace) => workspace.prepare(run)).pipe(Effect.provide(WorkspaceLive)),
+      Effect.flatMap(Workspace, (workspace) => workspace.prepare(run)).pipe(Effect.provide(Workspace.layer)),
     )
   const inspect = () =>
     Effect.runPromise(
-      Effect.flatMap(Workspace, (workspace) => workspace.inspect(run)).pipe(Effect.provide(WorkspaceLive)),
+      Effect.flatMap(Workspace, (workspace) => workspace.inspect(run)).pipe(Effect.provide(Workspace.layer)),
     )
   return { directory, run, prepare, inspect }
 }

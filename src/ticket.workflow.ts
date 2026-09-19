@@ -1,13 +1,12 @@
-import { Activity, DurableClock, DurableDeferred, Workflow } from '@effect/workflow'
 import { Effect } from 'effect'
+import { Activity, DurableClock, DurableDeferred, Workflow } from 'effect/unstable/workflow'
 
 import { Coordinator } from './coordinator'
 import { AppError, RunId, StepResult } from './domain'
 
 // Persists the assignment loop as an Effect Workflow with retryable activities and durable human-response waits.
 
-export const TicketWorkflow = Workflow.make({
-  name: 'linear-ticket-v1',
+export const TicketWorkflow = Workflow.make('linear-ticket-v1', {
   payload: { id: RunId },
   idempotencyKey: (input) => input.id,
   error: AppError,

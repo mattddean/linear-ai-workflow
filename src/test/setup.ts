@@ -55,7 +55,7 @@ const startDatabase = Effect.fn('Test.startDatabase')(function* () {
 
 await Effect.runPromise(
   startDatabase().pipe(
-    Scope.extend(scope),
+    Scope.provide(scope),
     Effect.onError(() => Scope.close(scope, Exit.void)),
   ),
 )

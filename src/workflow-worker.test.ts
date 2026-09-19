@@ -4,7 +4,7 @@ import { Config, Effect } from 'effect'
 // Verifies worker process startup and shutdown against the disposable database owned by the test preload.
 
 test('worker process starts the cluster and shuts down cleanly against disposable Postgres', async () => {
-  const databaseUrl = await Effect.runPromise(Config.string('TEST_DATABASE_URL'))
+  const databaseUrl = await Effect.runPromise(Config.String('TEST_DATABASE_URL'))
   const { mkdtemp, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')

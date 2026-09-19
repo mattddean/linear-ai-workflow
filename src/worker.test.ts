@@ -16,7 +16,7 @@ test('worker ownership is persisted and a competing session cannot hold the same
   await Effect.runPromise(
     Effect.gen(function* () {
       const ownerScope = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
-      yield* acquireWorkerLock('local').pipe(Scope.extend(ownerScope))
+      yield* acquireWorkerLock('local').pipe(Scope.provide(ownerScope))
       const db = yield* Db
       const owners = yield* db
         .select()

@@ -1,6 +1,6 @@
-import { Command } from '@effect/cli'
-import { BunContext, BunRuntime } from '@effect/platform-bun'
-import { Effect } from 'effect'
+import { BunServices, BunRuntime } from '@effect/platform-bun'
+import { Effect, Layer } from 'effect'
+import { Command } from 'effect/unstable/cli'
 
 import { rootRuntime } from './runtime/layers/root'
 import { statusCommand, listCommand, pauseCommand, resumeCommand } from './ticket.command'
@@ -9,10 +9,11 @@ import { statusCommand, listCommand, pauseCommand, resumeCommand } from './ticke
 
 const command = Command.make('linear-ai-workflow').pipe(
   Command.withSubcommands([statusCommand, listCommand, pauseCommand, resumeCommand]),
+  Command.provide(Layer.effectContext(rootRuntime.contextEffect)),
 )
-Command.run(command, { name: 'Linear AI Workflow', version: '0.1.0' })(process.argv).pipe(
-  Effect.provide(BunContext.layer),
-  Effect.tapErrorCause(Effect.logError),
+Command.run(command, { version: '0.1.0' }).pipe(
+  Effect.provide(BunServices.layer),
+  Effect.tapCause(Effect.logError),
   Effect.ensuring(rootRuntime.disposeEffect),
   BunRuntime.runMain,
 )

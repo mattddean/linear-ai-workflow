@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import { Effect, Layer } from 'effect'
 
-import { Coordinator, CoordinatorLive } from './coordinator'
+import { Coordinator } from './coordinator'
 import { Db } from './db/live'
 import { workflow_runs, workflow_assignments } from './db/schema'
 import { Store } from './store'
@@ -12,7 +12,7 @@ import { fixture } from './test/fixtures'
 // Verifies coordinator replay and publication recovery against persisted run and journal rows, with external services faked.
 
 function coordinatorLayer(f: ReturnType<typeof fixture>) {
-  return CoordinatorLive.pipe(Layer.provideMerge(f.dependencies), Layer.provideMerge(TestStoreLive))
+  return Coordinator.layer.pipe(Layer.provideMerge(f.dependencies), Layer.provideMerge(TestStoreLive))
 }
 
 const execute = (f: ReturnType<typeof fixture>) =>

@@ -60,7 +60,7 @@ export const discoverTickets = Effect.fn('Discovery.poll')(function* () {
   yield* Effect.forEach(
     issues.filter((issue) => !known.has(issue.id)),
     (issue) =>
-      enrollIssue(issue).pipe(Effect.catchAll((failure) => Effect.logError(`${issue.identifier}: ${failure.message}`))),
+      enrollIssue(issue).pipe(Effect.catch((failure) => Effect.logError(`${issue.identifier}: ${failure.message}`))),
     { discard: true },
   )
 })
@@ -72,7 +72,7 @@ export const watchTickets = Effect.fn('Discovery.watch')(function* () {
   yield* workspace.inspectBase(target)
   yield* Effect.logInfo(`Watching team ${settings.teamId} for ai-workflow tickets; repository ${target.repo}`)
   return yield* discoverTickets().pipe(
-    Effect.catchAll((failure) => Effect.logError(failure.message)),
+    Effect.catch((failure) => Effect.logError(failure.message)),
     Effect.repeat(Schedule.spaced(`${settings.pollSeconds} seconds`)),
   )
 })

@@ -1,19 +1,25 @@
-import { FetchHttpClient } from '@effect/platform'
-import { expect, spyOn, test } from 'bun:test'
+import { expect, test } from 'bun:test'
 import { Cause, Effect, Layer, Schema } from 'effect'
+import { FetchHttpClient } from 'effect/unstable/http'
 
 import { Settings } from './config'
 import { CommentId, IssueId } from './domain'
-import { GraphQLClientLive } from './graphql-client'
-import { Linear, LinearLive } from './linear.client'
+import { GraphQLClient } from './graphql-client'
+import { Linear } from './linear.client'
 import { fixture, settings, userId } from './test/fixtures'
 
 // Verifies Linear pagination, publication reconciliation, and GraphQL error handling with mocked HTTP responses.
 
-const transportLayer = GraphQLClientLive('https://api.linear.app/graphql', settings.linearKey).pipe(
-  Layer.provide(FetchHttpClient.layer),
-)
-const testLayer = LinearLive.pipe(Layer.provide(transportLayer), Layer.provide(Layer.succeed(Settings, settings)))
+const testLayer = (fetch: typeof globalThis.fetch) =>
+  Linear.layer.pipe(
+    Layer.provide(
+      GraphQLClient.layer('https://api.linear.app/graphql', settings.linearKey).pipe(
+        Layer.provide(FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch)))),
+      ),
+    ),
+    Layer.provide(Layer.succeed(Settings, settings)),
+    Layer.fresh,
+  )
 
 const fetchImplementation = (handler: (...args: Parameters<typeof fetch>) => Promise<Response>) =>
   Object.assign(
@@ -36,7 +42,7 @@ test('Linear adapter paginates comments and reconciles a published event without
   const second = { ...first, id: CommentId.make(crypto.randomUUID()), body: '<!-- event -->\nReport' }
   let pages = 0
   let requests = 0
-  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+  const layer = testLayer(
     fetchImplementation(async (_url, init) => {
       requests += 1
       if (typeof init?.body !== 'string') throw new Error('Expected JSON request')
@@ -63,12 +69,11 @@ test('Linear adapter paginates comments and reconciles a published event without
       })
     }),
   )
-  const layer = testLayer
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const linear = yield* Linear
       return yield* linear.post({ issueId: f.state.run.issueId, body: second.body, eventMarker: '<!-- event -->' })
-    }).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(() => fetchMock.mockRestore()))),
+    }).pipe(Effect.provide(layer)),
   )
   expect(result.id).toBe(second.id)
   expect(pages).toBe(2)
@@ -77,7 +82,7 @@ test('Linear adapter paginates comments and reconciles a published event without
 
 test('GraphQL errors with HTTP 200 cannot be mistaken for success', async () => {
   const f = fixture()
-  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+  const layer = testLayer(
     fetchImplementation(async () =>
       Response.json({
         errors: [
@@ -93,7 +98,7 @@ test('GraphQL errors with HTTP 200 cannot be mistaken for success', async () => 
     Effect.gen(function* () {
       const linear = yield* Linear
       return yield* linear.read(f.state.run.issueId).pipe(Effect.exit)
-    }).pipe(Effect.provide(testLayer), Effect.ensuring(Effect.sync(() => fetchMock.mockRestore()))),
+    }).pipe(Effect.provide(layer)),
   )
   expect(result._tag).toBe('Failure')
   if (result._tag === 'Failure')
@@ -109,13 +114,13 @@ test('comment creation preserves native Linear request and response properties',
     user: { id: userId },
   }
   let published = false
-  const requestSchema = Schema.parseJson(
+  const requestSchema = Schema.fromJsonString(
     Schema.Struct({
       query: Schema.String,
-      variables: Schema.Record({ key: Schema.String, value: Schema.NullOr(Schema.String) }),
+      variables: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
     }),
   )
-  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+  const layer = testLayer(
     fetchImplementation(async (_url, init) => {
       if (typeof init?.body !== 'string') throw new Error('Expected JSON request')
       const request = Schema.decodeUnknownSync(requestSchema)(init.body)
@@ -150,7 +155,7 @@ test('comment creation preserves native Linear request and response properties',
   const result = await Effect.runPromise(
     Effect.flatMap(Linear, (linear) =>
       linear.post({ issueId: f.state.run.issueId, body: comment.body, eventMarker: '<!-- new-event -->' }),
-    ).pipe(Effect.provide(testLayer), Effect.ensuring(Effect.sync(() => fetchMock.mockRestore()))),
+    ).pipe(Effect.provide(layer)),
   )
   expect(result).toEqual(comment)
   expect(published).toBe(true)
@@ -165,11 +170,11 @@ test('discovery queries the exact team and label, paginates, and excludes closed
     state: { type },
   })
   let requests = 0
-  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+  const layer = testLayer(
     fetchImplementation(async (_url, init) => {
       if (typeof init?.body !== 'string') throw new Error('Expected JSON request')
       const request = Schema.decodeUnknownSync(
-        Schema.parseJson(
+        Schema.fromJsonString(
           Schema.Struct({
             query: Schema.String,
             variables: Schema.Struct({ teamId: Schema.String, after: Schema.NullOr(Schema.String) }),
@@ -199,10 +204,7 @@ test('discovery queries the exact team and label, paginates, and excludes closed
     }),
   )
   const issues = await Effect.runPromise(
-    Effect.flatMap(Linear, (linear) => linear.discover).pipe(
-      Effect.provide(testLayer),
-      Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
-    ),
+    Effect.flatMap(Linear, (linear) => linear.discover).pipe(Effect.provide(layer)),
   )
   expect(issues.map((issue) => issue.id)).toEqual([first.id, second.id])
   expect(requests).toBe(2)
@@ -218,7 +220,7 @@ test('replies are paginated from the requested comment thread and retain the ful
     user: { id: userId },
   }
   let pages = 0
-  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+  const layer = testLayer(
     fetchImplementation(async (_url, init) => {
       if (typeof init?.body !== 'string') throw new Error('Expected JSON request')
       expect(init.body).toContain('children(first: 100, after: $after)')
@@ -242,8 +244,7 @@ test('replies are paginated from the requested comment thread and retain the ful
   )
   const replies = await Effect.runPromise(
     Effect.flatMap(Linear, (linear) => linear.replies({ issueId: f.state.run.issueId, commentId: parent })).pipe(
-      Effect.provide(testLayer),
-      Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
+      Effect.provide(layer),
     ),
   )
   expect(replies).toEqual([answer])
@@ -253,7 +254,7 @@ test('replies are paginated from the requested comment thread and retain the ful
 test('reply threads belonging to another issue are rejected', async () => {
   const f = fixture()
   const parent = CommentId.make(crypto.randomUUID())
-  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+  const layer = testLayer(
     fetchImplementation(async () =>
       Response.json({
         data: {
@@ -269,7 +270,7 @@ test('reply threads belonging to another issue are rejected', async () => {
   const result = await Effect.runPromise(
     Effect.flatMap(Linear, (linear) =>
       linear.replies({ issueId: f.state.run.issueId, commentId: parent }).pipe(Effect.exit),
-    ).pipe(Effect.provide(testLayer), Effect.ensuring(Effect.sync(() => fetchMock.mockRestore()))),
+    ).pipe(Effect.provide(layer)),
   )
   expect(result._tag).toBe('Failure')
 })
@@ -285,14 +286,14 @@ test.each([false, true])('acknowledgements resolve nested reply=%s to its root a
   }
   const targetId = nested ? CommentId.make(crypto.randomUUID()) : parentId
   let writes = 0
-  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+  const layer = testLayer(
     fetchImplementation(async (_url, init) => {
       if (typeof init?.body !== 'string') throw new Error('Expected request body')
       const request = Schema.decodeUnknownSync(
-        Schema.parseJson(
+        Schema.fromJsonString(
           Schema.Struct({
             query: Schema.String,
-            variables: Schema.Record({ key: Schema.String, value: Schema.NullOr(Schema.String) }),
+            variables: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
           }),
         ),
       )(init.body)
@@ -344,7 +345,7 @@ test.each([false, true])('acknowledgements resolve nested reply=%s to its root a
       }
       expect(yield* linear.post(input)).toEqual(comment)
       expect(yield* linear.post(input)).toEqual(comment)
-    }).pipe(Effect.provide(testLayer), Effect.ensuring(Effect.sync(() => fetchMock.mockRestore()))),
+    }).pipe(Effect.provide(layer)),
   )
   expect(writes).toBe(1)
 })

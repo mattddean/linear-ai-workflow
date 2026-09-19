@@ -33,6 +33,14 @@ Infer types where possible; give public APIs and complex functions explicit retu
 
 ## Effect architecture
 
+This repository uses Effect v4. Before writing Effect code, read `node_modules/effect/AGENTS.md` **completely** and follow its relevant linked guides. Verify APIs against the installed `node_modules/effect/src` and matching driver sources; migration references and Junior examples may target a different version.
+
+- Define services with `Context.Service<Self, Shape>()('linear-ai-workflow/<module>/<Service>')`. V4 replaces both `Context.Tag` and `Effect.Service`; do not introduce either v3 API.
+- Give services with a default implementation an explicit static `layer` using `Layer.effect` or `Layer.succeed`. Use `Layer.effect` for scoped acquisition too; the layer owns its resource scope. Use a parameterized static `layer(...)` when construction needs explicit arguments. V4 does not generate `.Default` layers.
+- Keep injected settings and third-party handles as typed service interfaces too. Use `Context.Reference` only when a safe fallback is intentional; required configuration and credentials must never gain implicit defaults.
+- Obtain dependencies with `yield*` and keep their requirements visible. Wire layers at composition roots with `Layer.provide` / `Layer.provideMerge`; tests supply alternatives with `Service.of` and `Layer.succeed`.
+- Import consolidated CLI, HTTP, SQL, Cluster, and Workflow modules from `effect/unstable/*`. Keep `effect` and remaining `@effect/*` drivers/platform packages pinned to the same v4 release. Do not add removed v3 packages or compatibility wrappers.
+
 When in doubt about how to structure any feature, service, database access, or infrastructure, inspect the corresponding implementation in Junior before choosing a pattern. Match its conventions unless this project has a concrete reason to differ.
 
 Use the local [junior repository](../junior.mtdn.dev/junior.mtdn.dev) as a reference for good Effect practices. Before implementing Effect services, durable workflows, or CLI commands, consult the relevant working examples there:
@@ -41,16 +49,16 @@ Use the local [junior repository](../junior.mtdn.dev/junior.mtdn.dev) as a refer
 - [Effect guidance in AGENTS.md](../junior.mtdn.dev/junior.mtdn.dev/AGENTS.md): named operations, service requirements, Layers, and runtime boundaries.
 - [Workflow engine](../junior.mtdn.dev/junior.mtdn.dev/apps/express/workflows/workflow-engine.ts) and [workflow registration](../junior.mtdn.dev/junior.mtdn.dev/apps/express/workflows/index.ts): durable infrastructure and composition roots.
 - [Photo-processing workflow](../junior.mtdn.dev/junior.mtdn.dev/apps/express/shopping-photo-processing.workflow.ts): a domain-owned workflow implementation.
-- [CLI composition](../junior.mtdn.dev/junior.mtdn.dev/apps/express/commands.ts): `@effect/cli` commands and the process runtime boundary.
+- [CLI composition](../junior.mtdn.dev/junior.mtdn.dev/apps/express/commands.ts): `effect/unstable/cli` commands and the process runtime boundary.
 - [Workflow tests and test layers](../junior.mtdn.dev/junior.mtdn.dev/apps/express/workflows): persistence and recovery verification patterns.
 
-Adapt these patterns to this project's requirements and installed Effect versions. Junior is a reference, not a dependency or a source of app-specific requirements; this repository's instructions remain authoritative.
+Adapt these patterns to this project's requirements and installed Effect v4 APIs; do not copy Junior's v3 service or package syntax. Junior is a reference, not a dependency or a source of app-specific requirements; this repository's instructions remain authoritative.
 
 - Use named `Effect.fn` for meaningful effectful operations and service methods. Keep pure transformations pure.
 - Model failures with typed errors and handle them at the layer that can act on them. Distinguish retryable transport failures, invalid responses, permission failures, and human blockers.
 - Keep service requirements on Effects; provide Layers at composition roots. Do not create private runtimes inside domain services.
 - Use `Effect.runPromise` or `Effect.runFork` only at process/framework boundaries. Use scoped resources and interruption for processes, leases, and database connections.
-- Compose CLI commands with `@effect/cli` in domain-owned `*.command.ts` modules and aggregate them in `src/commands.ts`. Aggregate domain `*.workflow.ts` layers in `src/workflows/index.ts` and start them through `registerWorkflows()`.
+- Compose CLI commands with `effect/unstable/cli` in domain-owned `*.command.ts` modules and aggregate them in `src/commands.ts`. Aggregate domain `*.workflow.ts` layers in `src/workflows/index.ts` and start them through `registerWorkflows()`.
 - Use Effect Workflow's durable execution and waiting mechanisms. Verify installed APIs against the actual package types and official documentation; never invent persistence or recovery guarantees.
 - Keep the workflow definition separate from Linear transport, Codex process execution, Git operations, and artifact storage. Make those boundaries replaceable in tests.
 

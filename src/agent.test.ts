@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
-import { Effect, Fiber, Layer } from 'effect'
+import { Effect, Fiber, Layer, Schema } from 'effect'
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { Agent, AgentLive } from './agent'
+import { Agent } from './agent'
 import { childEnvironment } from './child-environment'
 import { Settings } from './config'
 import { Path } from './domain'
@@ -38,7 +38,7 @@ async function mockCodex(options: { hang: boolean }) {
   const script = `#!${process.execPath}\nconst args = process.argv.slice(2);\nawait Bun.write(${JSON.stringify(join(dir, 'args.json'))}, JSON.stringify(args));\nawait Bun.write(${JSON.stringify(join(dir, 'input.md'))}, await Bun.stdin.text());\n${options.hang ? 'await new Promise(() => { setInterval(() => {}, 1000) });' : `await Bun.write(args[args.indexOf('--output-last-message') + 1], ${JSON.stringify(JSON.stringify(output))});\nconsole.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:20,output_tokens:3}}));`}\n`
   await writeFile(join(dir, 'codex'), script)
   await chmod(join(dir, 'codex'), 0o755)
-  const layer = AgentLive.pipe(Layer.provide(Layer.succeed(Settings, { ...settings, artifactRoot: Path.make(dir) })))
+  const layer = Agent.layer.pipe(Layer.provide(Layer.succeed(Settings, { ...settings, artifactRoot: Path.make(dir) })))
   const assignment = {
     run: { ...f.state.run, workspace: Path.make(dir) },
     snapshot: f.state.snapshot,
@@ -63,6 +63,19 @@ test('local runner pins Astra, uses structured output, isolates reviewer writes,
   )
   expect(output.tokens).toBe(23)
   expect(output.result).toEqual(ready(mock.assignment.run))
+  const resultSchema = Schema.decodeUnknownSync(
+    Schema.fromJsonString(
+      Schema.Struct({
+        type: Schema.Literal('object'),
+        additionalProperties: Schema.Literal(false),
+        required: Schema.Array(Schema.String),
+        properties: Schema.Record(Schema.String, Schema.Unknown),
+      }),
+    ),
+  )(await readFile(join(mock.assignment.artifactDir, 'result-schema.json'), 'utf8'))
+  expect(resultSchema.required).toContain('outcome')
+  expect(resultSchema.required).toContain('report')
+  expect(Object.keys(resultSchema.properties).sort()).toEqual([...resultSchema.required].sort())
   const args = await readFile(join(mock.dir, 'args.json'), 'utf8')
   expect(args).toContain('gpt-6-astra')
   expect(args).toContain(JSON.stringify('model_reasoning_effort="medium"'))

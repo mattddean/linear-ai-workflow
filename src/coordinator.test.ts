@@ -186,12 +186,11 @@ test('human reply acknowledgement is threaded and precedes resumed agent executi
 test('local progress logs identify the ticket and role through assignment and handoff', async () => {
   const f = fixture()
   const logs: string[] = []
-  const logger = Logger.replace(
-    Logger.defaultLogger,
-    Logger.map(Logger.stringLogger, (line) => {
+  const logger = Logger.layer([
+    Logger.map(Logger.formatSimple, (line) => {
       logs.push(line)
     }),
-  )
+  ])
   await Effect.runPromise(
     Effect.flatMap(Coordinator, (coordinator) => coordinator.step({ id: f.state.run.id, sequence: 0 })).pipe(
       Effect.provide(f.layer),

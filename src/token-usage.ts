@@ -20,7 +20,7 @@ export function budgetTokens(usage: { tokens: number; cachedTokens?: number | un
 export function countTokenUsage(log: string): TokenUsage {
   return log.split('\n').reduce<TokenUsage>(
     (sum, line) => {
-      const event = Schema.decodeUnknownOption(Schema.parseJson(UsageEvent))(line)
+      const event = Schema.decodeUnknownOption(Schema.fromJsonString(UsageEvent))(line)
       if (Option.isNone(event)) return sum
       const usage = event.value.usage
       return {

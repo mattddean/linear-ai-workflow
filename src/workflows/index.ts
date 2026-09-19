@@ -10,7 +10,7 @@ import { workerEngineLayer } from './workflow-engine'
 // Aggregates domain workflow layers and registers the selected worker’s execution and polling services.
 
 export const workflowsLayer = (group: WorkerGroup) =>
-  Layer.unwrapEffect(
+  Layer.unwrap(
     Effect.gen(function* () {
       const settings = yield* Settings
       return Layer.merge(TicketWorkflowLive, pollingLayer(group)).pipe(

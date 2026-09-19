@@ -6,7 +6,7 @@ import type { Journal } from './domain'
 
 import { Db } from './db/live'
 import { workflow_runs, workflow_assignments } from './db/schema'
-import { Store, StoreLive, controls } from './store'
+import { Store, controls } from './store'
 import { TestDatabaseLive, TestStoreLive } from './test/db'
 import { fixture, makeRun, ready } from './test/fixtures'
 
@@ -21,15 +21,15 @@ test('Postgres run survives a store restart and enforces one active enrollment p
       yield* store.create(run)
       const duplicate = yield* store.create({ ...run, id: makeRun().id }).pipe(Effect.exit)
       expect(duplicate._tag).toBe('Failure')
-    }).pipe(Effect.provide(StoreLive.pipe(Layer.provideMerge(db)))),
+    }).pipe(Effect.provide(Store.layer.pipe(Layer.provideMerge(db)))),
   )
   const loaded = await Effect.runPromise(
-    Effect.flatMap(Store, (store) => store.get(run.id)).pipe(Effect.provide(StoreLive.pipe(Layer.provide(db)))),
+    Effect.flatMap(Store, (store) => store.get(run.id)).pipe(Effect.provide(Store.layer.pipe(Layer.provide(db)))),
   )
   expect(loaded).toEqual(run)
   await Effect.runPromise(
     Effect.flatMap(Store, (store) => store.save({ ...run, status: 'approved' })).pipe(
-      Effect.provide(StoreLive.pipe(Layer.provide(db))),
+      Effect.provide(Store.layer.pipe(Layer.provide(db))),
     ),
   )
 }, 15000)
@@ -79,7 +79,7 @@ test('handoff transaction rolls back its journal when the run update conflicts',
 
       expect(yield* store.get(run.id)).toEqual(run)
       yield* store.save({ ...run, status: 'approved' })
-    }).pipe(Effect.provide(StoreLive.pipe(Layer.provideMerge(TestDatabaseLive)))),
+    }).pipe(Effect.provide(Store.layer.pipe(Layer.provideMerge(TestDatabaseLive)))),
   )
 }, 15000)
 

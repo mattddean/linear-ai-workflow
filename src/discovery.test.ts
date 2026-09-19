@@ -89,9 +89,9 @@ test('discovery persists configured work offline and picks up labels added on a 
         .where(eq(workflow_worker_owners.worker_group, 'local'))
       expect(owner?.worker_id).toBe(settings.workerId)
       const foreignRun = { ...makeRun(), workerId: WorkerId.make('another-machine') }
-      const refused = yield* store.enroll(foreignRun).pipe(Effect.either)
-      expect(refused._tag).toBe('Left')
-      if (refused._tag === 'Left') expect(refused.left.kind).toBe('blocked')
+      const refused = yield* store.enroll(foreignRun).pipe(Effect.result)
+      expect(refused._tag).toBe('Failure')
+      if (refused._tag === 'Failure') expect(refused.failure.kind).toBe('blocked')
       expect(yield* db.select().from(workflow_runs).where(eq(workflow_runs.id, foreignRun.id))).toHaveLength(0)
       for (const row of rows) yield* store.save({ ...(yield* store.get(row.id)), status: 'approved' })
     }).pipe(

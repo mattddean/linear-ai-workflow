@@ -1,3 +1,5 @@
+import { BunClusterSocket } from '@effect/platform-bun'
+import { Effect, Layer, Option } from 'effect'
 import {
   ClusterSchema,
   ClusterWorkflowEngine,
@@ -9,10 +11,8 @@ import {
   SqlMessageStorage,
   SqlRunnerStorage,
   type MessageStorage,
-} from '@effect/cluster'
-import { BunClusterSocket } from '@effect/platform-bun'
-import { WorkflowEngine } from '@effect/workflow'
-import { Effect, Layer, Option } from 'effect'
+} from 'effect/unstable/cluster'
+import { WorkflowEngine } from 'effect/unstable/workflow'
 
 import type { WorkerGroup } from '../domain'
 
@@ -20,7 +20,7 @@ import { error } from '../domain'
 
 // Configures durable Effect Cluster storage and routes workflow execution and wakeups to the selected worker group.
 
-// Append groups only: Effect 0.54 derives Postgres advisory lock IDs from their order.
+// Keep the available groups stable: Cluster derives advisory-lock IDs from the sorted group list.
 export const workerGroups = ['default', 'local'] as const
 
 export function workflowEngineLayer(
@@ -69,6 +69,9 @@ export function workflowEngineLayer(
         interrupt: Effect.fn('WorkflowRouting.interrupt')((workflow, executionId) =>
           engine.interrupt(workflow, executionId).pipe(withRouting),
         ),
+        interruptUnsafe: Effect.fn('WorkflowRouting.interruptUnsafe')((workflow, executionId) =>
+          engine.interruptUnsafe(workflow, executionId).pipe(withRouting),
+        ),
         resume: Effect.fn('WorkflowRouting.resume')((workflow, executionId) =>
           engine.resume(workflow, executionId).pipe(withRouting),
         ),
@@ -90,7 +93,7 @@ export function workflowEngineLayer(
 }
 
 const storage = Layer.merge(SqlMessageStorage.layer, SqlRunnerStorage.layer).pipe(
-  Layer.provide(ShardingConfig.layerFromEnv({ shardGroups: workerGroups })),
+  Layer.provide(ShardingConfig.layer({ availableShardGroups: workerGroups })),
 )
 export function workerEngineLayer(options: { group: WorkerGroup; host: string; port: number }) {
   return workflowEngineLayer(options.group).pipe(
@@ -100,7 +103,8 @@ export function workerEngineLayer(options: { group: WorkerGroup; host: string; p
         shardingConfig: {
           runnerAddress: Option.some(RunnerAddress.make(options.host, options.port)),
           runnerListenAddress: Option.some(RunnerAddress.make(options.host, options.port)),
-          shardGroups: [options.group],
+          availableShardGroups: workerGroups,
+          assignedShardGroups: [options.group],
           entityMessagePollInterval: '500 millis',
         },
       }).pipe(Layer.provideMerge(storage)),
@@ -109,7 +113,13 @@ export function workerEngineLayer(options: { group: WorkerGroup; host: string; p
 }
 export function clientEngineLayer(group: WorkerGroup) {
   return workflowEngineLayer(group).pipe(
-    Layer.provideMerge(BunClusterSocket.layer({ clientOnly: true, storage: 'byo' }).pipe(Layer.provideMerge(storage))),
+    Layer.provideMerge(
+      BunClusterSocket.layer({
+        clientOnly: true,
+        storage: 'byo',
+        shardingConfig: { availableShardGroups: workerGroups },
+      }).pipe(Layer.provideMerge(storage)),
+    ),
   )
 }
 export const ensureWorker = Effect.fn('Cluster.ensureWorker')(function* (group: WorkerGroup) {

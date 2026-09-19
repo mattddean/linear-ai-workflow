@@ -1,8 +1,8 @@
-import { HttpClient, HttpClientResponse } from '@effect/platform'
 import { expect, test } from 'bun:test'
 import { Effect, Layer, Redacted, Schema } from 'effect'
+import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
-import { GraphQLClient, GraphQLClientLive } from './graphql-client'
+import { GraphQLClient } from './graphql-client'
 
 // Verifies schema validation and failure classification through an injected HTTP client without live requests.
 
@@ -21,16 +21,16 @@ test.each([
     requests += 1
     return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body, { status })))
   })
-  const layer = GraphQLClientLive('https://example.test/graphql', Redacted.make('test-only')).pipe(
+  const layer = GraphQLClient.layer('https://example.test/graphql', Redacted.make('test-only')).pipe(
     Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
   )
   const result = await Effect.runPromise(
     Effect.flatMap(GraphQLClient, (client) =>
       client.execute({ query: 'mutation Test { value }', variables: {}, schema: Result }),
-    ).pipe(Effect.either, Effect.provide(layer)),
+    ).pipe(Effect.result, Effect.provide(layer)),
   )
-  expect(result._tag).toBe('Left')
-  if (result._tag === 'Left') expect(result.left.kind).toBe(kind)
+  expect(result._tag).toBe('Failure')
+  if (result._tag === 'Failure') expect(result.failure.kind).toBe(kind)
   expect(requests).toBe(1)
 })
 
@@ -49,7 +49,7 @@ test('GraphQL sends authenticated JSON and decodes operation data', async () => 
       })
     return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: { value: 'decoded' } })))
   })
-  const layer = GraphQLClientLive('https://example.test/graphql', Redacted.make('test-only')).pipe(
+  const layer = GraphQLClient.layer('https://example.test/graphql', Redacted.make('test-only')).pipe(
     Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
   )
   const result = await Effect.runPromise(

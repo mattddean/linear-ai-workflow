@@ -1,17 +1,17 @@
-import type { Schema } from 'effect'
-
 import { sql } from 'drizzle-orm'
 import { boolean, integer, jsonb, pgTable, primaryKey, text, uniqueIndex } from 'drizzle-orm/pg-core'
 
 import type { RunData, JournalData } from '../boundary-schemas'
 import type { IssueId, RunId, WorkerGroup, WorkerId } from '../domain'
 
+// Defines durable workflow runs, assignment journals, and machine ownership with snake_case persisted payloads.
+
 export const workflow_runs = pgTable(
   'workflow_runs',
   {
     id: text('id').$type<RunId>().primaryKey(),
     issue_id: text('issue_id').$type<IssueId>().notNull(),
-    data: jsonb('data').$type<Schema.Schema.Encoded<typeof RunData>>().notNull(),
+    data: jsonb('data').$type<typeof RunData.Encoded>().notNull(),
     pause_requested: boolean('pause_requested').notNull().default(false),
     resume_requested: boolean('resume_requested').notNull().default(false),
     resume_answer: text('resume_answer'),
@@ -31,7 +31,7 @@ export const workflow_assignments = pgTable(
       .notNull()
       .references(() => workflow_runs.id),
     sequence: integer('sequence').notNull(),
-    data: jsonb('data').$type<Schema.Schema.Encoded<typeof JournalData>>().notNull(),
+    data: jsonb('data').$type<typeof JournalData.Encoded>().notNull(),
   },
   (table) => [primaryKey({ columns: [table.run_id, table.sequence] })],
 )

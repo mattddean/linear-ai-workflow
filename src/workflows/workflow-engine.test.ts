@@ -1,19 +1,19 @@
-import { BunContext } from '@effect/platform-bun'
+import { BunServices } from '@effect/platform-bun'
 import { expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
-import { Effect, Exit, Layer, Scope } from 'effect'
+import { Effect, Exit, Layer, Option, Scope } from 'effect'
 
 import type { Comment } from '../domain'
 
 import { DiscoverySettings } from '../config'
-import { CoordinatorLive } from '../coordinator'
+import { Coordinator } from '../coordinator'
 import { Db } from '../db/live'
 import { workflow_runs, workflow_assignments } from '../db/schema'
 import { discoverTickets } from '../discovery'
 import { Branch, CommentId, error } from '../domain'
 import { blocked } from '../handoff'
 import { Linear } from '../linear.client'
-import { Store, StoreLive } from '../store'
+import { Store } from '../store'
 import { TestDatabaseLive } from '../test/db'
 import { fixture, makeRun, ready, userId } from '../test/fixtures'
 import { TicketWorkflow, TicketWorkflowLive } from '../ticket.workflow'
@@ -43,17 +43,17 @@ test.each([...workerGroups])(
         }),
     })
     const dependencies = Layer.merge(f.dependencies, Layer.succeed(Linear, linear)).pipe(
-      Layer.provideMerge(StoreLive),
+      Layer.provideMerge(Store.layer),
       Layer.provideMerge(db),
-      Layer.provideMerge(BunContext.layer),
+      Layer.provideMerge(BunServices.layer),
     )
     const port = 35671
     const worker = TicketWorkflowLive.pipe(
-      Layer.provide(CoordinatorLive),
+      Layer.provide(Coordinator.layer),
       Layer.provideMerge(workerEngineLayer({ group, host: '127.0.0.1', port })),
       Layer.provideMerge(dependencies),
     )
-    const client = clientEngineLayer(group).pipe(Layer.provide(db), Layer.provide(BunContext.layer))
+    const client = clientEngineLayer(group).pipe(Layer.provide(db), Layer.provide(BunServices.layer))
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* Effect.flatMap(Store, (store) => store.create(f.state.run)).pipe(Effect.provide(dependencies))
@@ -108,7 +108,7 @@ test.each([...workerGroups])(
         expect(f.state.posts).toBe(5)
         for (;;) {
           const result = yield* TicketWorkflow.poll(executionId).pipe(Effect.provide(clientContext))
-          if (result?._tag === 'Complete') break
+          if (Option.isSome(result) && result.value._tag === 'Complete') break
           yield* Effect.sleep('100 millis')
         }
         yield* Scope.close(scope2, Exit.void)
@@ -133,16 +133,16 @@ test('discovered ticket runs PM to developer to QA to PM despite another ticket 
     updatedAt: '2000-01-01T00:00:00Z',
   }
   const dependencies = f.dependencies.pipe(
-    Layer.provideMerge(StoreLive),
+    Layer.provideMerge(Store.layer),
     Layer.provideMerge(TestDatabaseLive),
-    Layer.provideMerge(BunContext.layer),
+    Layer.provideMerge(BunServices.layer),
   )
   const linear = Linear.of({
     ...f.linear,
     read: (id) => (id === stranded.issueId ? Effect.fail(error('linear', 'Issue inaccessible')) : f.linear.read(id)),
   })
   const worker = TicketWorkflowLive.pipe(
-    Layer.provide(CoordinatorLive),
+    Layer.provide(Coordinator.layer),
     Layer.provideMerge(workerEngineLayer({ group: 'local', host: '127.0.0.1', port: 35673 })),
   )
   await Effect.runPromise(

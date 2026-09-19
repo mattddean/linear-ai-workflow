@@ -4,27 +4,15 @@ import { Comment, Issue, Result, Run, Assignment, Journal } from './domain'
 
 // Converts snake_case persisted JSON payloads to the typed camelCase domain model and back.
 
-export const CommentData = Schema.Struct({
-  id: Comment.fields.id,
-  body: Comment.fields.body,
-  created_at: Comment.fields.createdAt,
-  user: Comment.fields.user,
-}).pipe(
-  Schema.rename({
-    created_at: 'createdAt',
+export const CommentData = Comment.pipe(
+  Schema.encodeKeys({
+    createdAt: 'created_at',
   }),
 )
 
-export const IssueData = Schema.Struct({
-  id: Issue.fields.id,
-  identifier: Issue.fields.identifier,
-  title: Issue.fields.title,
-  description: Issue.fields.description,
-  updated_at: Issue.fields.updatedAt,
-  team: Issue.fields.team,
-}).pipe(
-  Schema.rename({
-    updated_at: 'updatedAt',
+export const IssueData = Issue.pipe(
+  Schema.encodeKeys({
+    updatedAt: 'updated_at',
   }),
 )
 
@@ -33,102 +21,64 @@ export const SnapshotData = Schema.Struct({
   comments: Schema.Array(CommentData),
 })
 
-export const ResultData = Schema.Struct({
-  outcome: Result.fields.outcome,
-  next_role: Result.fields.nextRole,
-  next_phase: Result.fields.nextPhase,
-  refinement_comment_id: Result.fields.refinementCommentId,
-  commit_sha: Result.fields.commitSha,
-  report: Result.fields.report,
-  question: Result.fields.question,
-}).pipe(
-  Schema.rename({
-    next_role: 'nextRole',
-    next_phase: 'nextPhase',
-    refinement_comment_id: 'refinementCommentId',
-    commit_sha: 'commitSha',
+export const ResultData = Result.pipe(
+  Schema.encodeKeys({
+    nextRole: 'next_role',
+    nextPhase: 'next_phase',
+    refinementCommentId: 'refinement_comment_id',
+    commitSha: 'commit_sha',
   }),
 )
 
-export const RunData = Schema.Struct({
-  id: Run.fields.id,
-  worker_group: Run.fields.workerGroup,
-  worker_id: Run.fields.workerId,
-  issue_id: Run.fields.issueId,
-  issue_key: Run.fields.issueKey,
-  repo: Run.fields.repo,
-  workspace: Run.fields.workspace,
-  branch: Run.fields.branch,
-  base_sha: Run.fields.baseSha,
-  commit_sha: Run.fields.commitSha,
-  refinement_comment_id: Run.fields.refinementCommentId,
-  predecessor_id: Run.fields.predecessorId,
-  phase: Run.fields.phase,
-  status: Run.fields.status,
-  sequence: Run.fields.sequence,
-  attempts: Run.fields.attempts,
-  tokens: Run.fields.tokens,
-  cached_tokens: Run.fields.cachedTokens,
-  max_attempts: Run.fields.maxAttempts,
-  max_tokens: Run.fields.maxTokens,
-  max_minutes: Run.fields.maxMinutes,
-  active_millis: Run.fields.activeMillis,
-  note: Run.fields.note,
-  question: Run.fields.question,
-  wait_sequence: Run.fields.waitSequence,
-  answer: Run.fields.answer,
-  response_comment_id: Run.fields.responseCommentId,
-  issue_fingerprint: Run.fields.issueFingerprint,
-  updated_at: Run.fields.updatedAt,
-}).pipe(
-  Schema.rename({
-    cached_tokens: 'cachedTokens',
-    worker_group: 'workerGroup',
-    worker_id: 'workerId',
-    issue_id: 'issueId',
-    issue_key: 'issueKey',
-    base_sha: 'baseSha',
-    commit_sha: 'commitSha',
-    refinement_comment_id: 'refinementCommentId',
-    predecessor_id: 'predecessorId',
-    max_attempts: 'maxAttempts',
-    max_tokens: 'maxTokens',
-    max_minutes: 'maxMinutes',
-    active_millis: 'activeMillis',
-    wait_sequence: 'waitSequence',
-    response_comment_id: 'responseCommentId',
-    issue_fingerprint: 'issueFingerprint',
-    updated_at: 'updatedAt',
+export const RunData = Run.pipe(
+  Schema.encodeKeys({
+    cachedTokens: 'cached_tokens',
+    workerGroup: 'worker_group',
+    workerId: 'worker_id',
+    issueId: 'issue_id',
+    issueKey: 'issue_key',
+    baseSha: 'base_sha',
+    commitSha: 'commit_sha',
+    refinementCommentId: 'refinement_comment_id',
+    predecessorId: 'predecessor_id',
+    maxAttempts: 'max_attempts',
+    maxTokens: 'max_tokens',
+    maxMinutes: 'max_minutes',
+    activeMillis: 'active_millis',
+    waitSequence: 'wait_sequence',
+    responseCommentId: 'response_comment_id',
+    issueFingerprint: 'issue_fingerprint',
+    updatedAt: 'updated_at',
   }),
 )
 
 export const AssignmentData = Schema.Struct({
   run: RunData,
   snapshot: SnapshotData,
-  artifact_dir: Assignment.fields.artifactDir,
+  artifactDir: Assignment.fields.artifactDir,
 }).pipe(
-  Schema.rename({
-    artifact_dir: 'artifactDir',
+  Schema.encodeKeys({
+    artifactDir: 'artifact_dir',
   }),
 )
 
 export const JournalData = Schema.Struct({
   assignment: AssignmentData,
   state: Journal.fields.state,
-  agent_started: Journal.fields.agentStarted,
+  agentStarted: Journal.fields.agentStarted,
   result: Schema.NullOr(ResultData),
-  comment_id: Journal.fields.commentId,
+  commentId: Journal.fields.commentId,
   body: Journal.fields.body,
   tokens: Journal.fields.tokens,
-  cached_tokens: Journal.fields.cachedTokens,
-  elapsed_millis: Journal.fields.elapsedMillis,
-  step_result: Journal.fields.stepResult,
+  cachedTokens: Journal.fields.cachedTokens,
+  elapsedMillis: Journal.fields.elapsedMillis,
+  stepResult: Journal.fields.stepResult,
 }).pipe(
-  Schema.rename({
-    cached_tokens: 'cachedTokens',
-    agent_started: 'agentStarted',
-    comment_id: 'commentId',
-    elapsed_millis: 'elapsedMillis',
-    step_result: 'stepResult',
+  Schema.encodeKeys({
+    cachedTokens: 'cached_tokens',
+    agentStarted: 'agent_started',
+    commentId: 'comment_id',
+    elapsedMillis: 'elapsed_millis',
+    stepResult: 'step_result',
   }),
 )

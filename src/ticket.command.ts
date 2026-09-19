@@ -1,55 +1,54 @@
-import { Args, Command, Options } from '@effect/cli'
 import { Console, Effect, Schema } from 'effect'
+import { Argument, Command, Flag } from 'effect/unstable/cli'
 
 import { recoverAgentLease } from './agent'
 import { Settings } from './config'
 import { RunId, error } from './domain'
-import { rootRuntime } from './runtime/layers/root'
 import { Store } from './store'
 import { budgetTokens } from './token-usage'
 import { Workspace } from './workspace'
 
 // Defines ticket inspection and operator-control commands against the shared process services.
 
-const idArgument = Args.text({ name: 'run-id' })
+const idArgument = Argument.String('run-id')
 export const statusCommand = Command.make('status', { id: idArgument }, ({ id }) =>
   Effect.gen(function* () {
     const store = yield* Store
-    const run = yield* store.get(yield* Schema.decodeUnknown(RunId)(id))
+    const run = yield* store.get(yield* Schema.decodeUnknownEffect(RunId)(id))
     yield* Console.log(JSON.stringify({ ...run, budgetTokens: budgetTokens(run) }, null, 2))
-  }).pipe(Effect.provide(rootRuntime)),
+  }),
 )
 export const listCommand = Command.make('list', {}, () =>
   Effect.gen(function* () {
     const store = yield* Store
     yield* Console.log(JSON.stringify(yield* store.list, null, 2))
-  }).pipe(Effect.provide(rootRuntime)),
+  }),
 )
 export const pauseCommand = Command.make('pause', { id: idArgument }, ({ id }) =>
   Effect.gen(function* () {
     const store = yield* Store
-    const run = yield* store.get(yield* Schema.decodeUnknown(RunId)(id))
+    const run = yield* store.get(yield* Schema.decodeUnknownEffect(RunId)(id))
     if (run.status === 'approved') return yield* error('invalid', 'Approved runs are complete')
     yield* store.control({ id: run.id, command: 'pause', answer: null })
     yield* Console.log('Pause requested. The worker will stop the active assignment and preserve its work.')
-  }).pipe(Effect.provide(rootRuntime)),
+  }),
 )
 export const resumeCommand = Command.make(
   'resume',
   {
     id: idArgument,
-    answer: Options.text('answer').pipe(Options.withDefault('')),
-    extraTokens: Options.integer('extra-tokens').pipe(Options.withDefault(0)),
-    extraMinutes: Options.integer('extra-minutes').pipe(Options.withDefault(0)),
-    extraAttempts: Options.integer('extra-attempts').pipe(Options.withDefault(0)),
-    acceptHead: Options.boolean('accept-head'),
+    answer: Flag.String('answer').pipe(Flag.withDefault('')),
+    extraTokens: Flag.Int('extra-tokens').pipe(Flag.withDefault(0)),
+    extraMinutes: Flag.Int('extra-minutes').pipe(Flag.withDefault(0)),
+    extraAttempts: Flag.Int('extra-attempts').pipe(Flag.withDefault(0)),
+    acceptHead: Flag.Boolean('accept-head').pipe(Flag.withDefault(false)),
   },
   (input) =>
     Effect.gen(function* () {
       const store = yield* Store
       const workspace = yield* Workspace
       const settings = yield* Settings
-      const run = yield* store.get(yield* Schema.decodeUnknown(RunId)(input.id))
+      const run = yield* store.get(yield* Schema.decodeUnknownEffect(RunId)(input.id))
       if (run.workerId !== settings.workerId)
         return yield* error('blocked', `Resume on the owning machine (${run.workerId})`)
       if (run.status !== 'blocked' && run.status !== 'paused')
@@ -74,5 +73,5 @@ export const resumeCommand = Command.make(
       })
       yield* store.control({ id: run.id, command: 'resume', answer: input.answer || null })
       yield* Console.log('Resume requested; the worker will reconcile the pending handoff before continuing.')
-    }).pipe(Effect.provide(rootRuntime)),
+    }),
 )

@@ -1,7 +1,7 @@
-import { SqlClient } from '@effect/sql'
-import { DurableDeferred } from '@effect/workflow'
 import { and, eq, sql as expression } from 'drizzle-orm'
 import { Effect, Layer, Schedule, Schema } from 'effect'
+import { SqlClient } from 'effect/unstable/sql'
+import { DurableDeferred } from 'effect/unstable/workflow'
 
 import type { CommentId, Run, WorkerGroup } from './domain'
 
@@ -86,7 +86,7 @@ export const pollRuns = Effect.fn('Worker.pollRuns')(function* (group: WorkerGro
     runs.filter((run) => run.workerGroup === group && run.workerId === settings.workerId && run.status !== 'approved'),
     (run) =>
       pollRun(run).pipe(
-        Effect.catchAll((failure) => Effect.logError(failure)),
+        Effect.catch((failure) => Effect.logError(failure)),
         Effect.annotateLogs({ ticket: run.issueKey, run: run.id, phase: run.phase }),
       ),
     { discard: true },
@@ -94,11 +94,11 @@ export const pollRuns = Effect.fn('Worker.pollRuns')(function* (group: WorkerGro
 })
 
 export const pollingLayer = (group: WorkerGroup) =>
-  Layer.scopedDiscard(
+  Layer.effectDiscard(
     Effect.gen(function* () {
       const settings = yield* Settings
       yield* pollRuns(group).pipe(
-        Effect.catchAll((failure) => Effect.logError(failure)),
+        Effect.catch((failure) => Effect.logError(failure)),
         Effect.repeat(Schedule.spaced(`${settings.pollSeconds} seconds`)),
         Effect.forkScoped,
       )
@@ -112,7 +112,7 @@ export const acquireWorkerLock = Effect.fn('Worker.acquireLock')(function* (grou
   // One owner per group keeps local files on their machine; use another group for another machine.
   const key = `linear-ai-workflow/${group}`
   const rows = yield* connection.executeValues('SELECT pg_try_advisory_lock(hashtext($1))', [key])
-  const decoded = yield* Schema.decodeUnknown(Schema.Array(Schema.Tuple(Schema.Boolean)))(rows)
+  const decoded = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Tuple([Schema.Boolean])))(rows)
   if (decoded[0]?.[0] !== true) return yield* error('blocked', `Another ${group} coordinator holds the execution lease`)
   yield* Effect.addFinalizer(() =>
     connection.executeValues('SELECT pg_advisory_unlock(hashtext($1))', [key]).pipe(Effect.ignore),
