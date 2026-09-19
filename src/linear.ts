@@ -13,7 +13,12 @@ export class Linear extends Context.Tag('Linear')<
     readonly discover: Effect.Effect<readonly Issue[], AppError>
     readonly read: (id: IssueId | typeof IssueKey.Type) => Effect.Effect<Snapshot, AppError>
     readonly replies: (input: { issueId: IssueId; commentId: CommentId }) => Effect.Effect<readonly Comment[], AppError>
-    readonly post: (input: { issueId: IssueId; body: string; eventMarker: string }) => Effect.Effect<Comment, AppError>
+    readonly post: (input: {
+      issueId: IssueId
+      body: string
+      eventMarker: string
+      parentId?: CommentId | undefined
+    }) => Effect.Effect<Comment, AppError>
   }
 >() {}
 const Page = Schema.Struct({
@@ -27,6 +32,13 @@ const RepliesResponse = Schema.Struct({
     id: Comment.fields.id,
     issue: Schema.Struct({ id: Issue.fields.id, team: Issue.fields.team }),
     children: Page,
+  }),
+})
+const ThreadResponse = Schema.Struct({
+  comment: Schema.Struct({
+    id: Comment.fields.id,
+    parent: Schema.NullOr(Schema.Struct({ id: Comment.fields.id })),
+    issue: Schema.Struct({ id: Issue.fields.id, team: Issue.fields.team }),
   }),
 })
 const CreatedResponse = Schema.Struct({
@@ -45,7 +57,14 @@ const DiscoveryResponse = Schema.Struct({
   }),
 })
 const Envelope = Schema.Struct({
-  errors: Schema.optional(Schema.Array(Schema.Struct({ message: Schema.String }))),
+  errors: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        message: Schema.String,
+        extensions: Schema.optional(Schema.Struct({ userPresentableMessage: Schema.optional(Schema.String) })),
+      }),
+    ),
+  ),
   data: Schema.optional(Schema.Unknown),
 })
 const commentFields = 'id body createdAt user { id }'
@@ -93,7 +112,10 @@ export const LinearLive = Layer.effect(
         Effect.mapError(() => error('linear', 'Invalid Linear response')),
       )
       if (envelope.errors?.length)
-        return yield* error('linear', 'Linear returned GraphQL errors; verify credentials, scope, and API schema')
+        return yield* error(
+          'linear',
+          `Linear GraphQL: ${envelope.errors.map((item) => item.extensions?.userPresentableMessage ?? item.message).join('; ')}`,
+        )
       return envelope.data
     })
     const readRequest = (input: Parameters<typeof request>[0]) =>
@@ -152,8 +174,11 @@ export const LinearLive = Layer.effect(
           query: `query Comments($id: String!, $after: String) { issue(id: $id) { comments(first: 100, after: $after) { nodes { ${commentFields} } pageInfo { hasNextPage endCursor } } } }`,
           variables: { id: issue.id, after },
         }).pipe(
-          Effect.flatMap(Schema.decodeUnknown(CommentsResponse)),
-          Effect.mapError(() => error('linear', 'Invalid Linear comment page')),
+          Effect.flatMap((data) =>
+            Schema.decodeUnknown(CommentsResponse)(data).pipe(
+              Effect.mapError(() => error('linear', 'Invalid Linear comment page')),
+            ),
+          ),
         )
         comments.push(...page.issue.comments.nodes)
         if (!page.issue.comments.pageInfo.hasNextPage) break
@@ -174,8 +199,11 @@ export const LinearLive = Layer.effect(
           query: `query Replies($id: String!, $after: String) { comment(id: $id) { id issue { id team { id } } children(first: 100, after: $after) { nodes { ${commentFields} } pageInfo { hasNextPage endCursor } } } }`,
           variables: { id: input.commentId, after },
         }).pipe(
-          Effect.flatMap(Schema.decodeUnknown(RepliesResponse)),
-          Effect.mapError(() => error('linear', 'Invalid Linear reply page')),
+          Effect.flatMap((data) =>
+            Schema.decodeUnknown(RepliesResponse)(data).pipe(
+              Effect.mapError(() => error('linear', 'Invalid Linear reply page')),
+            ),
+          ),
         )
         if (
           page.comment.id !== input.commentId ||
@@ -191,18 +219,42 @@ export const LinearLive = Layer.effect(
       }
       return comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
     })
+    const threadParent = Effect.fn('Linear.threadParent')(function* (input: {
+      issueId: IssueId
+      commentId: CommentId
+    }) {
+      const data = yield* readRequest({
+        query: 'query Thread($id: String!) { comment(id: $id) { id parent { id } issue { id team { id } } } }',
+        variables: { id: input.commentId },
+      })
+      const { comment } = yield* Schema.decodeUnknown(ThreadResponse)(data).pipe(
+        Effect.mapError(() => error('linear', 'Invalid Linear comment thread')),
+      )
+      if (
+        comment.id !== input.commentId ||
+        comment.issue.id !== input.issueId ||
+        comment.issue.team.id !== settings.teamId
+      )
+        return yield* error('linear', 'Reply target is outside the requested issue or configured team')
+      // Linear permits one reply level: replying to a child must address its existing thread root.
+      return comment.parent?.id ?? comment.id
+    })
     const post = Effect.fn('Linear.post')(function* (input) {
       // Reconcile before every attempt, including after an ambiguous successful write.
       const snapshot = yield* read(input.issueId)
-      const existing = snapshot.comments.find((comment) => comment.body.startsWith(`${input.eventMarker}\n`))
+      const parentId = input.parentId
+        ? yield* threadParent({ issueId: input.issueId, commentId: input.parentId })
+        : null
+      const comments = parentId ? yield* replies({ issueId: input.issueId, commentId: parentId }) : snapshot.comments
+      const existing = comments.find((comment) => comment.body.startsWith(`${input.eventMarker}\n`))
       if (existing) {
         if (existing.body !== input.body)
           return yield* error('linear', 'Event marker exists with a different body; human reconciliation required')
         return existing
       }
       const data = yield* request({
-        query: `mutation Comment($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success comment { ${commentFields} } } }`,
-        variables: { issueId: input.issueId, body: input.body },
+        query: `mutation Comment($issueId: String!, $body: String!, $parentId: String) { commentCreate(input: { issueId: $issueId, body: $body, parentId: $parentId }) { success comment { ${commentFields} } } }`,
+        variables: { issueId: input.issueId, body: input.body, parentId },
       })
       const created = yield* Schema.decodeUnknown(CreatedResponse)(data).pipe(
         Effect.mapError(() => error('linear', 'Invalid comment creation result; reconcile before retrying')),
@@ -211,7 +263,10 @@ export const LinearLive = Layer.effect(
         return yield* error('linear', 'Linear did not confirm comment creation')
       // Fetch the persisted handoff rather than trusting an agent's draft or mutation echo.
       const confirmed = yield* read(input.issueId)
-      const comment = confirmed.comments.find((item) => item.id === created.commentCreate.comment?.id)
+      const confirmedComments = parentId
+        ? yield* replies({ issueId: input.issueId, commentId: parentId })
+        : confirmed.comments
+      const comment = confirmedComments.find((item) => item.id === created.commentCreate.comment?.id)
       if (!comment || comment.body !== input.body)
         return yield* error('transport', 'Published comment is not yet confirmed; retry reconciliation')
       return comment

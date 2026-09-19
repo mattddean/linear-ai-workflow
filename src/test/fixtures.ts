@@ -46,6 +46,7 @@ export function makeRun(): Run {
     sequence: 0,
     attempts: 0,
     tokens: 0,
+    cachedTokens: 0,
     maxAttempts: 3,
     maxTokens: 10000,
     maxMinutes: 10,
@@ -99,9 +100,11 @@ export function fixture(initial = makeRun()) {
     run: initial,
     journals: new Map<number, Journal>(),
     calls: 0,
+    cachedTokensPerAssignment: 0,
     posts: 0,
     pause: false,
     ambiguous: false,
+    ambiguousAcknowledgement: false,
     agentResult: (run: Run): Result => ready(run),
     snapshot: {
       issue: {
@@ -116,8 +119,15 @@ export function fixture(initial = makeRun()) {
     } satisfies Snapshot,
   }
   const comments: Comment[] = []
+  const acknowledgements: { comment: Comment; parentId: CommentId | undefined }[] = []
   const read = Effect.fn('Test.Linear.read')(() =>
-    Effect.sync((): Snapshot => structuredClone({ ...state.snapshot, comments })),
+    Effect.sync(
+      (): Snapshot =>
+        structuredClone({
+          ...state.snapshot,
+          comments: [...comments, ...acknowledgements.map((item) => item.comment)],
+        }),
+    ),
   )
   const linear = Linear.of({
     discover: Effect.succeed([state.snapshot.issue]),
@@ -125,17 +135,28 @@ export function fixture(initial = makeRun()) {
     read,
     post: Effect.fn('Test.Linear.post')((input) =>
       Effect.suspend(() => {
-        const existing = comments.find((comment) => comment.body.startsWith(input.eventMarker))
+        const acknowledgement = input.eventMarker.endsWith('/started -->')
+        const existing = [...comments, ...acknowledgements.map((item) => item.comment)].find((comment) =>
+          comment.body.startsWith(`${input.eventMarker}\n`),
+        )
         if (existing) return Effect.succeed(existing)
-        state.posts += 1
+        if (!acknowledgement) state.posts += 1
         const comment: Comment = {
           id: CommentId.make(crypto.randomUUID()),
           body: input.body,
           createdAt: new Date().toISOString(),
           user: { id: userId },
         }
-        comments.push(comment)
-        if (state.ambiguous) {
+        if (acknowledgement) {
+          const journal = [...state.journals.values()].find((item) => item.body === input.body)
+          if (state.journals.size > 0 && !journal) throw new Error('Acknowledgement intent must be saved first')
+          acknowledgements.push({ comment, parentId: input.parentId })
+          if (state.ambiguousAcknowledgement) {
+            state.ambiguousAcknowledgement = false
+            return Effect.fail(error('transport', 'Timed out after acknowledgement'))
+          }
+        } else comments.push(comment)
+        if (!acknowledgement && state.ambiguous) {
           state.ambiguous = false
           return Effect.fail(error('transport', 'Timed out after publication'))
         }
@@ -176,7 +197,7 @@ export function fixture(initial = makeRun()) {
     execute: Effect.fn('Test.Agent.execute')((assignment: Assignment) =>
       Effect.sync(() => {
         state.calls += 1
-        return { result: state.agentResult(assignment.run), tokens: 100 }
+        return { result: state.agentResult(assignment.run), tokens: 100, cachedTokens: state.cachedTokensPerAssignment }
       }),
     ),
   })
@@ -192,5 +213,5 @@ export function fixture(initial = makeRun()) {
     Layer.succeed(Linear, linear),
   )
   const layer = CoordinatorLive.pipe(Layer.provide(dependencies), Layer.provide(Layer.succeed(Store, store)))
-  return { state, comments, store, linear, agent, workspace, dependencies, layer }
+  return { state, comments, acknowledgements, store, linear, agent, workspace, dependencies, layer }
 }

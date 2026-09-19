@@ -68,6 +68,7 @@ export const RunData = Schema.Struct({
   sequence: Run.fields.sequence,
   attempts: Run.fields.attempts,
   tokens: Run.fields.tokens,
+  cached_tokens: Run.fields.cachedTokens,
   max_attempts: Run.fields.maxAttempts,
   max_tokens: Run.fields.maxTokens,
   max_minutes: Run.fields.maxMinutes,
@@ -76,10 +77,12 @@ export const RunData = Schema.Struct({
   question: Run.fields.question,
   wait_sequence: Run.fields.waitSequence,
   answer: Run.fields.answer,
+  response_comment_id: Run.fields.responseCommentId,
   issue_fingerprint: Run.fields.issueFingerprint,
   updated_at: Run.fields.updatedAt,
 }).pipe(
   Schema.rename({
+    cached_tokens: 'cachedTokens',
     worker_group: 'workerGroup',
     worker_id: 'workerId',
     issue_id: 'issueId',
@@ -93,6 +96,7 @@ export const RunData = Schema.Struct({
     max_minutes: 'maxMinutes',
     active_millis: 'activeMillis',
     wait_sequence: 'waitSequence',
+    response_comment_id: 'responseCommentId',
     issue_fingerprint: 'issueFingerprint',
     updated_at: 'updatedAt',
   }),
@@ -116,10 +120,12 @@ export const JournalData = Schema.Struct({
   comment_id: Journal.fields.commentId,
   body: Journal.fields.body,
   tokens: Journal.fields.tokens,
+  cached_tokens: Journal.fields.cachedTokens,
   elapsed_millis: Journal.fields.elapsedMillis,
   step_result: Journal.fields.stepResult,
 }).pipe(
   Schema.rename({
+    cached_tokens: 'cachedTokens',
     agent_started: 'agentStarted',
     comment_id: 'commentId',
     elapsed_millis: 'elapsedMillis',

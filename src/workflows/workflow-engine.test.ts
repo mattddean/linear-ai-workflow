@@ -101,6 +101,9 @@ test.each([...workerGroups])(
           if (run.status === 'approved') break
           yield* Effect.sleep('100 millis')
         }
+        expect(f.acknowledgements).toHaveLength(group === 'local' ? 2 : 1)
+        if (group === 'local')
+          expect(f.acknowledgements[1]?.parentId).toBe(f.comments.find((comment) => comment.body === answer)?.id)
         expect(f.state.calls).toBe(5)
         expect(f.state.posts).toBe(5)
         for (;;) {

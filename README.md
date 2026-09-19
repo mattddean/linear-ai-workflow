@@ -31,6 +31,8 @@ PM refinement --> Developer implementation --> QA verification --> PM acceptance
 4. QA independently inspects and tests that revision. Findings return to the Developer; a passing report goes to the PM.
 5. The PM checks the original request, refinement, implementation, and QA evidence. It accepts the result or routes specific corrections to the appropriate role.
 
+The worker posts 👀 when it picks up a ticket, and posts 👀 in the same thread as a human comment when it begins processing that answer. Acknowledgements are journaled before publication and reconciled on retries; routine role handoffs do not add more eyes comments.
+
 Each assignment uses a fresh local Codex session with `gpt-6-astra`. Agents communicate through persisted Linear comments; one agent's private conversation is never passed to another. The coordinator publishes an agent's report, confirms that Linear stored it, and fetches that comment before dispatching its recipient.
 
 Approval means the local implementation satisfies the ticket. Pushing, merging, deploying, and changing Linear status are separate, explicitly authorized actions.
@@ -64,7 +66,7 @@ Configure the coordinator with these environment variables. Keep secrets out of 
 | `WORKFLOW_RUNNER_PORT` | Cluster socket port; defaults to `34541`                          |
 | `POLL_SECONDS`         | Linear polling interval; defaults to `30`                         |
 
-The model is fixed to `gpt-6-astra`. Model access failures pause the run; the coordinator does not substitute another model. Codex uses its configured authentication. Repository commands do not receive the coordinator's Linear credential or database connection settings.
+The model is fixed to `gpt-6-astra` with explicit `medium` reasoning for every role. Model access failures pause the run; the coordinator does not substitute another model. Codex uses its configured authentication. Repository commands do not receive the coordinator's Linear credential or database connection settings.
 
 Defaults are a 30-second polling interval, three implementation attempts per refinement, a 120-minute active execution budget, and 1,000,000 reported tokens per run. Automatically discovered runs receive these limits when they enter the queue. Review a blocked run before extending its budget through the operator controls. The time limit interrupts an active Codex process. The token limit is checked between assignments using emitted usage; it is not a hard in-flight spending cap, and an interrupted turn may not emit complete usage.
 
@@ -168,6 +170,14 @@ QA independently verifies the reviewed commit and maps every acceptance criterio
 
 QA does not modify implementation source. Missing infrastructure, required device checks, or human confirmation produces a blocker rather than a pass. Every implementation revision returns through QA before PM acceptance.
 
+Token limits count uncached input plus output. Cached input is tracked separately as `cachedTokens` (`cached_tokens` in persisted JSON); `tokens` retains total input plus output for auditing. Status output and progress logs expose `budgetTokens`, the amount compared with `maxTokens`. Reasoning tokens are already included in output and are not added again. Saved usage without cache information is conservatively counted in full.
+
+## Local progress logs
+
+Watch the worker output in `bun run dev`. Assignment logs include the ticket, run, role, phase, and sequence, covering acknowledgement, Whey preparation, Codex start/finish, Linear publication, the next role, and blocked or accepted work. Human reply detection is logged when the worker queues the response.
+
+While Codex runs, a progress line appears every 30 seconds with its PID and elapsed time. Start logs identify the assignment's `events.jsonl` and `stderr.log` paths; use `tail -f` on those files for the raw local Codex event stream or diagnostics. Full prompts, answers, and credentials are not copied into the coordinator's progress logs.
+
 ## State and recovery
 
 | Storage                  | Responsibility                                                                                    |
@@ -177,7 +187,7 @@ QA does not modify implementation source. Missing infrastructure, required devic
 | Local Whey isolates      | Implementation branches and immutable review commits                                              |
 | Local artifact directory | Command logs, screenshots, and other verification evidence                                        |
 
-Each workflow comment identifies its run, event, role, phase, outcome, predecessor comment, refinement comment, reviewed commit, and next owner. Comments are appended rather than rewritten; revised refinements explicitly supersede earlier ones.
+Each handoff comment identifies its run, event, role, phase, outcome, predecessor comment, refinement comment, reviewed commit, and next owner. Comments are appended rather than rewritten; revised refinements explicitly supersede earlier ones.
 
 Effect Workflow persists execution progress and waits. A recorded assignment and an exclusive execution lease prevent competing dispatches. External effects still require reconciliation: durability does not make a comment publication or a Codex process exactly-once.
 

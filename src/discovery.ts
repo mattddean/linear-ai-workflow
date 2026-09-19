@@ -37,6 +37,7 @@ export const enrollIssue = Effect.fn('Discovery.enrollIssue')(function* (issue: 
     sequence: 0,
     attempts: 0,
     tokens: 0,
+    cachedTokens: 0,
     maxAttempts: 3,
     maxTokens: 1000000,
     maxMinutes: 120,

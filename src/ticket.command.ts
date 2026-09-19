@@ -6,6 +6,7 @@ import { Settings } from './config'
 import { RunId, error } from './domain'
 import { rootRuntime } from './runtime/layers/root'
 import { Store } from './store'
+import { budgetTokens } from './token-usage'
 import { Workspace } from './workspace'
 
 // Defines ticket inspection and operator-control commands against the shared process services.
@@ -15,7 +16,7 @@ export const statusCommand = Command.make('status', { id: idArgument }, ({ id })
   Effect.gen(function* () {
     const store = yield* Store
     const run = yield* store.get(yield* Schema.decodeUnknown(RunId)(id))
-    yield* Console.log(JSON.stringify(run, null, 2))
+    yield* Console.log(JSON.stringify({ ...run, budgetTokens: budgetTokens(run) }, null, 2))
   }).pipe(Effect.provide(rootRuntime)),
 )
 export const listCommand = Command.make('list', {}, () =>

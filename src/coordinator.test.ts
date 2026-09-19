@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { Effect } from 'effect'
+import { Effect, Logger } from 'effect'
 
 import { Coordinator } from './coordinator'
 import { CommentId } from './domain'
@@ -18,6 +18,9 @@ const execute = (f: ReturnType<typeof fixture>, sequence = f.state.run.sequence)
 test('PM → Developer → QA → PM accepts the same refinement and commit', async () => {
   const f = fixture()
   for (let i = 0; i < 4; i++) expect(await execute(f)).toBe(i === 3 ? 'complete' : 'continue')
+  expect(f.acknowledgements).toHaveLength(1)
+  expect(f.acknowledgements[0]?.parentId).toBeUndefined()
+  expect(f.acknowledgements[0]?.comment.body).toEndWith('\n👀')
   expect(f.state.run.status).toBe('approved')
   expect(f.state.run.commitSha).toBe(sha)
   expect(f.state.run.refinementCommentId).toBe(f.comments[0]?.id ?? null)
@@ -141,4 +144,82 @@ test('budget-blocked implementation does not consume another attempt', async () 
   expect(await execute(f)).toBe('wait')
   expect(f.state.run.attempts).toBe(3)
   expect(f.state.calls).toBe(1)
+})
+
+test('acknowledgements reconcile after an ambiguous write before executing the agent', async () => {
+  const f = fixture()
+  f.state.ambiguousAcknowledgement = true
+  const result = await Effect.runPromise(
+    Effect.flatMap(Coordinator, (coordinator) => coordinator.step({ id: f.state.run.id, sequence: 0 })).pipe(
+      Effect.provide(f.layer),
+      Effect.exit,
+    ),
+  )
+  expect(result._tag).toBe('Failure')
+  expect(f.state.journals.get(0)?.state).toBe('acknowledging')
+  expect(f.state.calls).toBe(0)
+  expect(f.acknowledgements).toHaveLength(1)
+  expect(await execute(f)).toBe('continue')
+  expect(f.acknowledgements).toHaveLength(1)
+  expect(f.state.calls).toBe(1)
+  expect(f.state.run.phase).toBe('implementation')
+})
+
+test('human reply acknowledgement is threaded and precedes resumed agent execution', async () => {
+  const responseCommentId = CommentId.make(crypto.randomUUID())
+  const f = fixture({ ...makeRun(), sequence: 1, answer: 'Try now', responseCommentId })
+  f.state.agentResult = (run) => {
+    expect(f.acknowledgements).toHaveLength(1)
+    expect(f.acknowledgements[0]?.parentId).toBe(responseCommentId)
+    return ready(run)
+  }
+  expect(await execute(f)).toBe('continue')
+  expect(f.state.run.responseCommentId).toBeUndefined()
+  const acknowledgement = f.acknowledgements[0]?.comment
+  const publication = f.comments[0]
+  if (!acknowledgement || !publication) throw new Error('Expected comments')
+  expect(
+    humanAnswer({ publication: { ...publication, createdAt: acknowledgement.createdAt }, replies: [acknowledgement] }),
+  ).toBeUndefined()
+})
+
+test('local progress logs identify the ticket and role through assignment and handoff', async () => {
+  const f = fixture()
+  const logs: string[] = []
+  const logger = Logger.replace(
+    Logger.defaultLogger,
+    Logger.map(Logger.stringLogger, (line) => {
+      logs.push(line)
+    }),
+  )
+  await Effect.runPromise(
+    Effect.flatMap(Coordinator, (coordinator) => coordinator.step({ id: f.state.run.id, sequence: 0 })).pipe(
+      Effect.provide(f.layer),
+      Effect.provide(logger),
+    ),
+  )
+  for (const message of [
+    'Publishing 👀 acknowledgement',
+    'Preparing Whey isolate',
+    'Starting Codex',
+    'Codex finished',
+    'Handoff confirmed',
+  ]) {
+    const line = logs.find((entry) => entry.includes(message))
+    expect(line).toContain('ticket=ENG-1')
+    expect(line).toContain(`run=${f.state.run.id}`)
+    expect(line).toContain('role=pm')
+    expect(line).toContain('sequence=0')
+  }
+})
+
+test('cached input does not exhaust the execution budget and remains tracked separately', async () => {
+  const f = fixture({ ...makeRun(), tokens: 12000, cachedTokens: 11000, maxTokens: 10000 })
+  expect(await execute(f)).toBe('continue')
+  expect(f.state.calls).toBe(1)
+  expect(f.state.run.tokens).toBe(12100)
+  expect(f.state.run.cachedTokens).toBe(11000)
+  const exhausted = fixture({ ...makeRun(), tokens: 12000, cachedTokens: 2000, maxTokens: 10000 })
+  expect(await execute(exhausted)).toBe('wait')
+  expect(exhausted.state.calls).toBe(0)
 })

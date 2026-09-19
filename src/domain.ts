@@ -74,6 +74,7 @@ export const Run = Schema.Struct({
   sequence: Schema.Int,
   attempts: Schema.Int,
   tokens: Schema.Int,
+  cachedTokens: Schema.optional(Schema.Int),
   maxAttempts: Schema.Int,
   maxTokens: Schema.Int,
   maxMinutes: Schema.Int,
@@ -82,24 +83,26 @@ export const Run = Schema.Struct({
   question: Schema.NullOr(Schema.String),
   waitSequence: Schema.NullOr(Schema.Int),
   answer: Schema.NullOr(Schema.String),
+  responseCommentId: Schema.optional(CommentId),
   issueFingerprint: Schema.String,
   updatedAt: Schema.String,
 })
 export type Run = typeof Run.Type
 export const Assignment = Schema.Struct({ run: Run, snapshot: Snapshot, artifactDir: Path })
 export type Assignment = typeof Assignment.Type
-export const AgentOutput = Schema.Struct({ result: Result, tokens: Schema.Int })
+export const AgentOutput = Schema.Struct({ result: Result, tokens: Schema.Int, cachedTokens: Schema.Int })
 export type AgentOutput = typeof AgentOutput.Type
 export const StepResult = Schema.Literal('continue', 'wait', 'complete')
 export type StepResult = typeof StepResult.Type
 export const Journal = Schema.Struct({
   assignment: Assignment,
-  state: Schema.Literal('started', 'prepared', 'done'),
+  state: Schema.Literal('acknowledging', 'started', 'prepared', 'done'),
   agentStarted: Schema.Boolean,
   result: Schema.NullOr(Result),
   commentId: Schema.NullOr(CommentId),
   body: Schema.NullOr(Schema.String),
   tokens: Schema.Int,
+  cachedTokens: Schema.optional(Schema.Int),
   elapsedMillis: Schema.Number,
   stepResult: Schema.NullOr(StepResult),
 })

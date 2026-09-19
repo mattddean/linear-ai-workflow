@@ -3,7 +3,7 @@ import { DurableDeferred } from '@effect/workflow'
 import { and, eq, sql as expression } from 'drizzle-orm'
 import { Effect, Layer, Schedule, Schema } from 'effect'
 
-import type { Run, WorkerGroup } from './domain'
+import type { CommentId, Run, WorkerGroup } from './domain'
 
 import { recoverAgentLease } from './agent'
 import { Settings } from './config'
@@ -24,22 +24,30 @@ const pollRun = Effect.fn('Worker.pollRun')(function* (run: Run) {
   if ((run.status === 'blocked' || run.status === 'paused') && run.waitSequence !== null) {
     const command = yield* controls(run.id)
     let answer = command.resume_answer
+    let responseCommentId: CommentId | undefined
     if (!command.resume_requested && run.status === 'blocked' && run.predecessorId !== null) {
       const snapshot = yield* linear.read(run.issueId)
       const publication = snapshot.comments.find((comment) => comment.id === run.predecessorId)
       if (publication) {
         const replies = yield* linear.replies({ issueId: run.issueId, commentId: publication.id })
         const response = humanAnswer({ replies, publication })
-        if (response) answer = response.body.trim()
+        if (response) {
+          answer = response.body.trim()
+          responseCommentId = response.id
+        }
       }
     }
     if (command.resume_requested || (answer !== null && answer.length > 0)) {
       yield* recoverAgentLease()
+      yield* Effect.logInfo(
+        responseCommentId ? 'Human reply detected; queuing work' : 'Operator resume requested',
+      ).pipe(Effect.annotateLogs({ responseCommentId: responseCommentId ?? 'CLI' }))
       const scopeChanged = answer?.startsWith('SCOPE:') ?? false
       const resumed: Run = {
         ...run,
         status: 'queued',
         answer,
+        responseCommentId,
         question: null,
         phase: scopeChanged ? 'refinement' : run.phase,
         refinementCommentId: scopeChanged ? null : run.refinementCommentId,
@@ -76,7 +84,11 @@ export const pollRuns = Effect.fn('Worker.pollRuns')(function* (group: WorkerGro
   const runs = yield* store.list
   yield* Effect.forEach(
     runs.filter((run) => run.workerGroup === group && run.workerId === settings.workerId && run.status !== 'approved'),
-    (run) => pollRun(run).pipe(Effect.catchAll((failure) => Effect.logError(`Run ${run.id}`, failure))),
+    (run) =>
+      pollRun(run).pipe(
+        Effect.catchAll((failure) => Effect.logError(failure)),
+        Effect.annotateLogs({ ticket: run.issueKey, run: run.id, phase: run.phase }),
+      ),
     { discard: true },
   )
 })

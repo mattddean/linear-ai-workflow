@@ -23,10 +23,19 @@ export const TicketWorkflowLive = TicketWorkflow.toLayer(
         error: AppError,
         execute: Effect.gen(function* () {
           const attempt = yield* Activity.CurrentAttempt
-          if (attempt > 1) yield* DurableClock.sleep({ name: `retry-${sequence}-${attempt}`, duration: '30 seconds' })
+          if (attempt > 1) {
+            yield* Effect.logWarning('Assignment retry scheduled in 30 seconds').pipe(
+              Effect.annotateLogs({ run: input.id, sequence, attempt }),
+            )
+            yield* DurableClock.sleep({ name: `retry-${sequence}-${attempt}`, duration: '30 seconds' })
+          }
           return yield* coordinator
             .step({ id: input.id, sequence })
-            .pipe(Effect.tapError((failure) => Effect.logError(failure.message)))
+            .pipe(
+              Effect.tapError((failure) =>
+                Effect.logError(failure.message).pipe(Effect.annotateLogs({ run: input.id, sequence, attempt })),
+              ),
+            )
         }),
       }).pipe(Activity.retry({}))
       if (result === 'complete') return

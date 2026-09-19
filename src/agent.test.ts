@@ -4,11 +4,12 @@ import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { Agent, AgentLive, countTokens } from './agent'
+import { Agent, AgentLive } from './agent'
 import { childEnvironment } from './child-environment'
 import { Settings } from './config'
 import { Path } from './domain'
 import { fixture, ready, settings } from './test/fixtures'
+import { budgetTokens, countTokenUsage } from './token-usage'
 
 // Verifies Codex invocation, credential isolation, usage accounting, and process cleanup with a local fake executable.
 
@@ -24,8 +25,10 @@ test('child environment excludes coordinator and inherited API credentials', () 
 
 test('usage ignores non-usage events and malformed log lines', () => {
   expect(
-    countTokens('bad\n' + JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 20, output_tokens: 3 } })),
-  ).toBe(23)
+    countTokenUsage(
+      'bad\n' + JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 20, output_tokens: 3 } }),
+    ),
+  ).toEqual({ tokens: 23, cachedTokens: 0 })
 })
 
 async function mockCodex(options: { hang: boolean }) {
@@ -62,6 +65,7 @@ test('local runner pins Astra, uses structured output, isolates reviewer writes,
   expect(output.result).toEqual(ready(mock.assignment.run))
   const args = await readFile(join(mock.dir, 'args.json'), 'utf8')
   expect(args).toContain('gpt-6-astra')
+  expect(args).toContain(JSON.stringify('model_reasoning_effort="medium"'))
   expect(args).toContain(mock.assignment.artifactDir)
   expect(args).not.toContain('dangerously')
   const input = await readFile(join(mock.dir, 'input.md'), 'utf8')
@@ -107,3 +111,18 @@ test('interrupting an assignment terminates the local process and releases the l
   ).toBe(false)
   await rm(mock.dir, { recursive: true, force: true })
 }, 10000)
+
+test('budget counts uncached input plus output across completed turns, without adding reasoning twice', () => {
+  const log = [
+    {
+      type: 'turn.completed',
+      usage: { input_tokens: 1000, cached_input_tokens: 900, output_tokens: 30, reasoning_output_tokens: 10 },
+    },
+    { type: 'turn.completed', usage: { input_tokens: 1500, cached_input_tokens: 1400, output_tokens: 20 } },
+  ]
+    .map((event) => JSON.stringify(event))
+    .join('\n')
+  const usage = countTokenUsage(log)
+  expect(usage).toEqual({ tokens: 2550, cachedTokens: 2300 })
+  expect(budgetTokens(usage)).toBe(250)
+})

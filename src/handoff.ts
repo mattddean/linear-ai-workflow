@@ -11,6 +11,7 @@ export const roleFor = (phase: Phase): typeof Role.Type =>
 export const fingerprint = (snapshot: Snapshot): string =>
   JSON.stringify([snapshot.issue.title, snapshot.issue.description])
 export const eventId = (run: Run): string => `${run.id}/${run.sequence}`
+export const acknowledgementMarker = (run: Run): string => `<!-- linear-ai-workflow:${eventId(run)}/started -->`
 export const marker = (run: Run): string => `<!-- linear-ai-workflow:${eventId(run)} -->`
 
 export const validateResult = Effect.fn('Result.validate')(function* (input: { run: Run; result: Result }) {
@@ -70,6 +71,7 @@ export function humanAnswer(input: { replies: readonly Comment[]; publication: C
     (comment) =>
       comment.id !== publication.id &&
       comment.user !== null &&
+      !comment.body.startsWith('<!-- linear-ai-workflow:') &&
       Date.parse(comment.createdAt) >= Date.parse(publication.createdAt) &&
       comment.body.trim().length > 0,
   )

@@ -22,6 +22,7 @@ const execute = (f: ReturnType<typeof fixture>) =>
 
 test('replay after rebuilding the coordinator reads its committed journal without repeating external work', async () => {
   const f = fixture()
+  f.state.cachedTokensPerAssignment = 60
   await Effect.runPromise(
     Effect.flatMap(Store, (store) => store.create(f.state.run)).pipe(Effect.provide(TestStoreLive)),
   )
@@ -39,11 +40,19 @@ test('replay after rebuilding the coordinator reads its committed journal withou
         .where(eq(workflow_assignments.run_id, f.state.run.id))
       expect(run?.data).toMatchObject({
         sequence: 1,
+        tokens: 100,
+        cached_tokens: 60,
         phase: 'implementation',
         refinement_comment_id: f.comments[0]?.id,
       })
       expect(journals).toHaveLength(1)
-      expect(journals[0]?.data).toMatchObject({ state: 'done', comment_id: f.comments[0]?.id, step_result: 'continue' })
+      expect(journals[0]?.data).toMatchObject({
+        state: 'done',
+        tokens: 100,
+        cached_tokens: 60,
+        comment_id: f.comments[0]?.id,
+        step_result: 'continue',
+      })
       const store = yield* Store
       yield* store.save({ ...(yield* store.get(f.state.run.id)), status: 'approved' })
     }).pipe(Effect.provide(TestStoreLive)),
@@ -85,6 +94,33 @@ test('ambiguous publication leaves a prepared outbox that a rebuilt coordinator 
       const run = yield* store.get(f.state.run.id)
       expect(run.sequence).toBe(1)
       yield* store.save({ ...run, status: 'approved' })
+    }).pipe(Effect.provide(TestStoreLive)),
+  )
+})
+
+test('persisted acknowledgement intent survives a restart after an ambiguous Linear write', async () => {
+  const f = fixture()
+  f.state.ambiguousAcknowledgement = true
+  await Effect.runPromise(
+    Effect.flatMap(Store, (store) => store.create(f.state.run)).pipe(Effect.provide(TestStoreLive)),
+  )
+  expect((await Effect.runPromise(execute(f).pipe(Effect.exit)))._tag).toBe('Failure')
+  expect(f.state.calls).toBe(0)
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const store = yield* Store
+      const journal = yield* store.journal(f.state.run)
+      expect(journal?.state).toBe('acknowledging')
+      expect(journal?.body).toBe(f.acknowledgements[0]?.comment.body)
+    }).pipe(Effect.provide(TestStoreLive)),
+  )
+  expect(await Effect.runPromise(execute(f))).toBe('continue')
+  expect(f.acknowledgements).toHaveLength(1)
+  expect(f.state.calls).toBe(1)
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const store = yield* Store
+      yield* store.save({ ...(yield* store.get(f.state.run.id)), status: 'approved' })
     }).pipe(Effect.provide(TestStoreLive)),
   )
 })

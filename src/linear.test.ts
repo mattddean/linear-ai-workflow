@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from 'bun:test'
-import { Effect, Layer, Schema } from 'effect'
+import { Cause, Effect, Layer, Schema } from 'effect'
 
 import { Settings } from './config'
 import { CommentId, IssueId } from './domain'
@@ -64,7 +64,16 @@ test('Linear adapter paginates comments and reconciles a published event without
 test('GraphQL errors with HTTP 200 cannot be mistaken for success', async () => {
   const f = fixture()
   const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
-    fetchImplementation(async () => Response.json({ errors: [{ message: 'Access denied' }] })),
+    fetchImplementation(async () =>
+      Response.json({
+        errors: [
+          {
+            message: 'incorrect parent',
+            extensions: { userPresentableMessage: 'Parent comment must be a top level comment.' },
+          },
+        ],
+      }),
+    ),
   )
   const result = await Effect.runPromise(
     Effect.gen(function* () {
@@ -76,6 +85,8 @@ test('GraphQL errors with HTTP 200 cannot be mistaken for success', async () => 
     ),
   )
   expect(result._tag).toBe('Failure')
+  if (result._tag === 'Failure')
+    expect(Cause.pretty(result.cause)).toContain('Parent comment must be a top level comment.')
 })
 
 test('comment creation preserves native Linear request and response properties', async () => {
@@ -98,7 +109,7 @@ test('comment creation preserves native Linear request and response properties',
       if (typeof init?.body !== 'string') throw new Error('Expected JSON request')
       const request = Schema.decodeUnknownSync(requestSchema)(init.body)
       if (request.query.includes('mutation Comment(')) {
-        expect(request.variables).toEqual({ issueId: f.state.run.issueId, body: comment.body })
+        expect(request.variables).toEqual({ issueId: f.state.run.issueId, body: comment.body, parentId: null })
         expect(request.query).toContain('commentCreate(input:')
         expect(request.query).not.toContain('comment_create')
         expect(request.query).toContain('issueId: $issueId')
@@ -256,4 +267,82 @@ test('reply threads belonging to another issue are rejected', async () => {
     ),
   )
   expect(result._tag).toBe('Failure')
+})
+
+test.each([false, true])('acknowledgements resolve nested reply=%s to its root and reconcile there', async (nested) => {
+  const f = fixture()
+  const parentId = CommentId.make(crypto.randomUUID())
+  const comment = {
+    id: CommentId.make(crypto.randomUUID()),
+    body: '<!-- ack-event -->\n👀',
+    createdAt: '2026-01-02T00:00:00Z',
+    user: { id: userId },
+  }
+  const targetId = nested ? CommentId.make(crypto.randomUUID()) : parentId
+  let writes = 0
+  const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+    fetchImplementation(async (_url, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected request body')
+      const request = Schema.decodeUnknownSync(
+        Schema.parseJson(
+          Schema.Struct({
+            query: Schema.String,
+            variables: Schema.Record({ key: Schema.String, value: Schema.NullOr(Schema.String) }),
+          }),
+        ),
+      )(init.body)
+      if (request.query.includes('query Thread(')) {
+        expect(request.variables.id).toBe(targetId)
+        return Response.json({
+          data: {
+            comment: {
+              id: targetId,
+              parent: nested ? { id: parentId } : null,
+              issue: { id: f.state.run.issueId, team: { id: settings.teamId } },
+            },
+          },
+        })
+      }
+      if (request.query.includes('mutation Comment(')) {
+        expect(request.variables.parentId).toBe(parentId)
+        expect(request.query).toContain('parentId: $parentId')
+        writes += 1
+        return Response.json({ data: { commentCreate: { success: true, comment } } })
+      }
+      if (request.query.includes('query Replies(')) {
+        expect(request.variables.id).toBe(parentId)
+        return Response.json({
+          data: {
+            comment: {
+              id: parentId,
+              issue: { id: f.state.run.issueId, team: { id: settings.teamId } },
+              children: { nodes: writes > 0 ? [comment] : [], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+          },
+        })
+      }
+      if (request.query.includes('query Issue(')) return Response.json({ data: { issue: f.state.snapshot.issue } })
+      // The acknowledgement need not appear in the issue's top-level comment list.
+      return Response.json({
+        data: { issue: { comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } },
+      })
+    }),
+  )
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const linear = yield* Linear
+      const input = {
+        issueId: f.state.run.issueId,
+        body: comment.body,
+        eventMarker: '<!-- ack-event -->',
+        parentId: targetId,
+      }
+      expect(yield* linear.post(input)).toEqual(comment)
+      expect(yield* linear.post(input)).toEqual(comment)
+    }).pipe(
+      Effect.provide(LinearLive.pipe(Layer.provide(Layer.succeed(Settings, settings)))),
+      Effect.ensuring(Effect.sync(() => fetchMock.mockRestore())),
+    ),
+  )
+  expect(writes).toBe(1)
 })

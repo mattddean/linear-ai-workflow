@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, JSONSchema, Schema, Option } from 'effect'
+import { Context, Effect, Layer, JSONSchema, Schema, Option, Schedule } from 'effect'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, readFile, writeFile, rm, open } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +9,7 @@ import { childEnvironment } from './child-environment'
 import { Settings } from './config'
 import { Result, error } from './domain'
 import { roleFor } from './handoff'
+import { countTokenUsage } from './token-usage'
 
 // Runs a role-specific Codex assignment with structured output, usage accounting, and a recoverable process lease.
 
@@ -18,16 +19,6 @@ export class Agent extends Context.Tag('Agent')<
     readonly execute: (assignment: Assignment) => Effect.Effect<AgentOutput, AppError>
   }
 >() {}
-const Usage = Schema.Struct({
-  type: Schema.Literal('turn.completed'),
-  usage: Schema.Struct({ input_tokens: Schema.Int, output_tokens: Schema.Int }),
-})
-export function countTokens(log: string): number {
-  return log.split('\n').reduce((sum, line) => {
-    const event = Schema.decodeUnknownOption(Schema.parseJson(Usage))(line)
-    return Option.isSome(event) ? sum + event.value.usage.input_tokens + event.value.usage.output_tokens : sum
-  }, 0)
-}
 const waitForExit = (child: ChildProcess): Promise<number> =>
   new Promise((resolveExit, reject) => {
     if (child.exitCode !== null) return resolveExit(child.exitCode)
@@ -138,6 +129,8 @@ export const AgentLive = Layer.effect(
             'exec',
             '--model',
             'gpt-6-astra',
+            '--config',
+            'model_reasoning_effort="medium"',
             '--sandbox',
             'workspace-write',
             '--cd',
@@ -171,6 +164,19 @@ export const AgentLive = Layer.effect(
             (child) => stopProcess(child).pipe(Effect.orDie),
           )
           spawned = true
+          const processStartedAt = Date.now()
+          yield* Effect.logInfo('Codex process started').pipe(
+            Effect.annotateLogs({ pid: child.pid, reasoning: 'medium', events: logPath, stderr: `${dir}/stderr.log` }),
+          )
+          yield* Effect.suspend(() =>
+            Effect.logInfo('Codex still running').pipe(
+              Effect.annotateLogs({
+                pid: child.pid,
+                elapsedSeconds: Math.round((Date.now() - processStartedAt) / 1000),
+                events: logPath,
+              }),
+            ),
+          ).pipe(Effect.repeat(Schedule.spaced('30 seconds')), Effect.delay('30 seconds'), Effect.forkScoped)
           let inputFailed = false
           child.stdin?.on('error', () => {
             inputFailed = true
@@ -187,6 +193,13 @@ export const AgentLive = Layer.effect(
                 error('blocked', 'Run time budget exhausted; review progress and resume with a larger budget'),
             }),
           )
+          yield* Effect.logInfo('Codex process exited').pipe(
+            Effect.annotateLogs({
+              pid: child.pid,
+              exitCode: code,
+              elapsedSeconds: Math.round((Date.now() - processStartedAt) / 1000),
+            }),
+          )
           if (inputFailed) return yield* error('agent', 'Could not deliver the complete assignment to Codex')
           if (code !== 0)
             return yield* error(
@@ -198,7 +211,7 @@ export const AgentLive = Layer.effect(
             Effect.mapError(() => error('invalid', `Invalid Codex structured result at ${resultPath}`)),
           )
           const log = yield* io(() => readFile(logPath, 'utf8'))
-          return { result, tokens: countTokens(log) }
+          return { result, ...countTokenUsage(log) }
         }).pipe(
           Effect.scoped,
           Effect.ensuring(
