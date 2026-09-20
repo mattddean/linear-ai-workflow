@@ -93,7 +93,9 @@ Enable Hammerspoon IPC in `~/.hammerspoon/init.lua`, reload it, and grant its ma
 require("hs.ipc")
 ```
 
-The bundled `hs` CLI is used directly. Desktop opening also checks configured apps/tools. Hammerspoon's experimental
+The bundled `hs` CLI is used directly. When IPC is unavailable, Whey launches Hammerspoon in the background and
+waits up to `hammerspoon.ipcTimeoutSeconds` (60 seconds by default) for it to respond. An unresponsive IPC check
+fails with setup instructions instead of hanging indefinitely. Desktop opening also checks configured apps/tools. Hammerspoon's experimental
 Spaces APIs may briefly show Mission Control. Initial window placement is applied on opening; it does not keep
 retiling windows. The Simulator opener connects to that isolate's Expo endpoint. Verify the app is serving the intended
 isolate before collecting evidence; neither a Space nor an open Simulator proves the app or server is healthy.

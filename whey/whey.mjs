@@ -176,7 +176,34 @@ function requiredNamesFor(command, state) {
   return []
 }
 
-function preflight(command, state) {
+async function ensureHammerspoon() {
+  const app = requiredAppPath('Hammerspoon')
+  if (!fs.existsSync(app)) fail('Hammerspoon is required and unavailable.')
+  const binary = requiredCheckCommand('hammerspoon')
+  const ready = (timeout) => {
+    const result = spawnSync(binary, ['-t', String(timeout / 1000), '-c', "return 'ok'"], {
+      cwd: repoRoot,
+      stdio: 'ignore',
+      timeout,
+      killSignal: 'SIGKILL',
+    })
+    return !result.error && result.status === 0
+  }
+  if (ready(1000)) return
+
+  console.log('Starting Hammerspoon and waiting for IPC…')
+  run('open', ['-g', '-a', app])
+  const deadline = performance.now() + hammerspoonIpcTimeoutSeconds() * 1000
+  while (performance.now() < deadline) {
+    if (ready(Math.max(1, Math.min(1000, Math.ceil(deadline - performance.now()))))) return
+    await sleep(100)
+  }
+  fail(
+    'Hammerspoon IPC did not become ready. Enable require("hs.ipc") in ~/.hammerspoon/init.lua and reload Hammerspoon.',
+  )
+}
+
+async function preflight(command, state) {
   const names = new Set(requiredNamesFor(command, state))
 
   for (const requirement of config.required) {
@@ -192,6 +219,10 @@ function preflight(command, state) {
     }
 
     if (requirement.check) {
+      if (requirement.name === 'hammerspoon') {
+        await ensureHammerspoon()
+        continue
+      }
       const [binary, ...args] = requirement.check
       runQuiet(binary, args, requirement.name)
       continue
@@ -1232,7 +1263,7 @@ async function cmdCreate(rawName) {
     fail('Isolate name must contain letters or numbers.')
   }
 
-  preflight('create')
+  await preflight('create')
   const managedRequested = options.base || options.branch || options.root
   if (managedRequested && (!options.base || !options.branch || !options.root)) {
     fail('Managed creation requires --base, --branch, and --root together.')
@@ -1329,7 +1360,7 @@ function verifyIsolateDatabase(project, state) {
 }
 
 async function cmdStart(rawName) {
-  preflight('start')
+  await preflight('start')
   const state = readState(slugify(rawName))
   if (state.managed) managedSummary(state)
   for (const project of config.projects) {
@@ -1348,7 +1379,7 @@ async function cmdStart(rawName) {
 
 async function cmdOpen(rawName) {
   const slug = slugify(rawName)
-  preflight('open')
+  await preflight('open')
 
   const state = readState(slug)
   await ensureConfiguredPorts(state)
@@ -1388,7 +1419,7 @@ async function cmdOpen(rawName) {
 async function cmdStop(rawName) {
   const slug = slugify(rawName)
   const state = readState(slug)
-  preflight('stop', state)
+  await preflight('stop', state)
   await ensureConfiguredPorts(state)
   syncEnvFiles(state)
   closeGhosttyWindow(state)
@@ -1406,7 +1437,7 @@ async function cmdStop(rawName) {
 async function cmdDestroy(rawName) {
   const slug = slugify(rawName)
   const state = readState(slug)
-  preflight('destroy', state)
+  await preflight('destroy', state)
   await ensureConfiguredPorts(state)
   closeGhosttyWindow(state)
   stopIsolateSpace(state)
