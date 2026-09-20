@@ -223,7 +223,7 @@ Mounts: [{ Type: 'volume', Name: project + '_data' }] }]))
       { env: { ...process.env }, stdout: 'pipe', stderr: 'pipe' },
     )
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
-    expect(code).toBe(ownership === 'owned' ? 0 : 1)
+    expect(code, stderr).toBe(ownership === 'owned' ? 0 : 1)
     expect(await Bun.file(join(f.run.workspace, 'migration-ran')).exists()).toBe(ownership === 'owned')
     if (ownership === 'foreign') expect(stderr).toContain('must belong to this isolate')
   })
