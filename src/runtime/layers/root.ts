@@ -1,5 +1,5 @@
 import { BunServices } from '@effect/platform-bun'
-import { Effect, Layer, ManagedRuntime } from 'effect'
+import { Effect, Layer } from 'effect'
 import { FetchHttpClient } from 'effect/unstable/http'
 
 import { Agent } from '../../agent'
@@ -11,7 +11,7 @@ import { Linear } from '../../linear.client'
 import { Store } from '../../store'
 import { Workspace } from '../../workspace'
 
-// Composes shared process services into RootLayer and the single managed rootRuntime.
+// Composes shared process services into the application's root layer.
 
 const BaseLayer = Layer.mergeAll(DatabaseLive, Settings.layer, BunServices.layer)
 const LinearTransportLayer = Layer.unwrap(
@@ -24,6 +24,3 @@ const ServicesLayer = Layer.mergeAll(
   Agent.layer,
 ).pipe(Layer.provideMerge(BaseLayer))
 export const RootLayer = Coordinator.layer.pipe(Layer.provideMerge(ServicesLayer))
-
-// Share services within each process; its boundary disposes this runtime on exit.
-export const rootRuntime = ManagedRuntime.make(RootLayer)

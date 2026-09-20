@@ -1,8 +1,10 @@
 import { PostgreSqlContainer } from '@testcontainers/postgresql'
 import { afterAll } from 'bun:test'
+import * as PgDrizzle from 'drizzle-orm/effect-postgres'
+import { migrate } from 'drizzle-orm/effect-postgres/migrator'
 import { Effect, Exit, Scope } from 'effect'
 
-// Starts and cleans up the test suite’s disposable Postgres database before application layers are imported.
+// Owns the disposable database, checked-in migrations, and shared test runtime lifecycle.
 
 const scope = Effect.runSync(Scope.make())
 afterAll(() => Effect.runPromise(Scope.close(scope, Exit.void)), 60000)
@@ -40,21 +42,24 @@ const startDatabase = Effect.fn('Test.startDatabase')(function* () {
     ISOLATE_ROOT: '/tmp/isolates',
     ARTIFACT_ROOT: '/tmp/artifacts',
   })
-  // This repo has source schemas but no checked-in migrations. Push only into this newly owned container.
-  const setup = Bun.spawn([process.execPath, 'node_modules/drizzle-kit/bin.cjs', 'push', '--force'], {
-    cwd: new URL('../../', import.meta.url).pathname,
-    env: { ...process.env, DATABASE_URL: container.getConnectionUri() },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  const [code, stdout, stderr] = yield* Effect.promise(() =>
-    Promise.all([setup.exited, new Response(setup.stdout).text(), new Response(setup.stderr).text()]),
-  )
-  if (code !== 0) return yield* Effect.die(`Disposable schema setup failed: ${stdout} ${stderr}`)
+  const { TestPgClientLive } = yield* Effect.promise(() => import('./pg-client'))
+  yield* Effect.gen(function* () {
+    const db = yield* PgDrizzle.makeWithDefaults()
+    yield* migrate(db, { migrationsFolder: `${import.meta.dir}/../../drizzle` })
+  }).pipe(Effect.provide(TestPgClientLive))
+})
+
+const startTestApp = Effect.fn('Test.startApp')(function* () {
+  yield* startDatabase()
+  // Application modules capture env on import; migrations must finish before services start.
+  const { testRuntime } = yield* Effect.promise(() => import('./runtime/root'))
+  // Registered after the container so the pool closes before Postgres stops, including on startup failure.
+  yield* Effect.addFinalizer(() => testRuntime.disposeEffect)
+  yield* testRuntime.contextEffect
 })
 
 await Effect.runPromise(
-  startDatabase().pipe(
+  startTestApp().pipe(
     Scope.provide(scope),
     Effect.onError(() => Scope.close(scope, Exit.void)),
   ),

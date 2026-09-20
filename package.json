@@ -2,6 +2,11 @@
   "name": "linear-ai-workflow",
   "version": "0.1.0",
   "private": true,
+  "workspaces": {
+    "packages": [
+      "tooling/*"
+    ]
+  },
   "type": "module",
   "scripts": {
     "cli": "bun src/commands.ts",
@@ -17,6 +22,8 @@
     "format:fix": "oxfmt",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "lint:ws": "bunx sherif@latest",
+    "postinstall": "bun run lint:ws",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "whey": "bun whey/whey.mjs"

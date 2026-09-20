@@ -3,7 +3,7 @@ import { Effect } from 'effect'
 
 import { DiscoverySettings } from './config'
 import { watchTickets } from './discovery'
-import { rootRuntime } from './runtime/layers/root'
+import { rootRuntime } from './runtime/root'
 
 // Starts the long-running ticket watcher as the coordinator’s development process.
 
