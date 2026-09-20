@@ -86,7 +86,8 @@ export const pollRuns = Effect.fn('Worker.pollRuns')(function* (group: WorkerGro
     runs.filter((run) => run.workerGroup === group && run.workerId === settings.workerId && run.status !== 'approved'),
     (run) =>
       pollRun(run).pipe(
-        Effect.catch((failure) => Effect.logError(failure)),
+        // catchCause rather than catch to catch not only errors but also defects.
+        Effect.catchCause((cause) => Effect.logError(cause)),
         Effect.annotateLogs({ ticket: run.issueKey, run: run.id, phase: run.phase }),
       ),
     { discard: true },
@@ -97,8 +98,10 @@ export const pollingLayer = (group: WorkerGroup) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const settings = yield* Settings
+      yield* Effect.logInfo(`Polling ${group} runs every ${settings.pollSeconds} seconds`)
       yield* pollRuns(group).pipe(
-        Effect.catch((failure) => Effect.logError(failure)),
+        // catchCause rather than catch to catch not only errors but also defects.
+        Effect.catchCause((cause) => Effect.logError(cause)),
         Effect.repeat(Schedule.spaced(`${settings.pollSeconds} seconds`)),
         Effect.forkScoped,
       )
