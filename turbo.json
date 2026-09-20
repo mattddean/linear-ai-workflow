@@ -2,11 +2,11 @@
   "$schema": "https://turborepo.com/schema.json",
   "ui": "tui",
   "tasks": {
-    "dev:coordinator": {
+    "//#dev:coordinator": {
       "cache": false,
       "persistent": true
     },
-    "dev:worker": {
+    "//#dev:worker": {
       "cache": false,
       "persistent": true
     }
