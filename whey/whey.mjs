@@ -7,6 +7,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
+import { attachTunnel } from './tunnel-client.mjs'
+import { decodeTunnelSettings } from './tunnel-protocol.mjs'
+
 // Provisions isolated repository snapshots and optionally manages their desktop windows and services.
 
 const { values: options, positionals } = parseArgs({
@@ -358,6 +361,10 @@ function render(value, context) {
       return repoRoot
     }
 
+    if (key === 'tunnelDomain') {
+      return decodeTunnelSettings(config.tunnel).domain
+    }
+
     if (key === 'riftRoot') {
       return riftRoot()
     }
@@ -515,6 +522,12 @@ function prepareChromiumProfile(profile) {
 
 function projectEnv(project, state, projectPath) {
   const values = {}
+
+  if (config.tunnel) {
+    values.WHEY_TUNNEL_CLI = fileURLToPath(import.meta.url)
+    values.WHEY_TUNNEL_CONFIG = configPath
+    values.WHEY_ISOLATE_ID = state.slug
+  }
 
   for (const [key, value] of Object.entries(project.env)) {
     values[key] = render(value, {
@@ -1377,6 +1390,25 @@ async function cmdStart(rawName) {
   }
 }
 
+async function cmdTunnel(rawName) {
+  const settings = decodeTunnelSettings(config.tunnel)
+  settings.configFile = absolutePath(settings.configFile)
+  const state = readState(slugify(rawName))
+  if (state.managed) managedSummary(state)
+  if (Object.values(state.projects).some((project) => project.phase !== 'ready')) {
+    fail('Isolate provisioning has not completed.')
+  }
+  await attachTunnel(
+    settings,
+    {
+      isolate_id: state.slug,
+      api_port: state.ports[settings.apiPortKey],
+      expo_port: state.ports[settings.expoPortKey],
+    },
+    path.join(stateRoot(), 'tunnel.log'),
+  )
+}
+
 async function cmdOpen(rawName) {
   const slug = slugify(rawName)
   await preflight('open')
@@ -1515,6 +1547,7 @@ function usage() {
   console.log('  inspect <isolate-name>  Return managed isolate identity as JSON.')
   console.log('                          Create a Rift snapshot, allocate ports, and write isolate env files.')
   console.log('  start <isolate-name>    Run isolate initialization hooks without opening desktop apps.')
+  console.log('  tunnel <isolate-name>   Register API and Expo routes while this dev task runs.')
   console.log('  open <isolate-name>     Open the isolate, or switch to it when it is already open.')
   console.log('  stop <isolate-name>     Close isolate windows, remove the native Space, and run stop hooks.')
   console.log('  destroy <isolate-name>  Stop the isolate, remove Docker volumes, Rift snapshot, profiles, and state.')
@@ -1540,6 +1573,9 @@ switch (command) {
     break
   case 'start':
     await cmdStart(name)
+    break
+  case 'tunnel':
+    await cmdTunnel(name)
     break
   case 'open':
     await cmdOpen(name)

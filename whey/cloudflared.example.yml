@@ -1,0 +1,8 @@
+# Routes the isolate wildcard to Whey's shared loopback gateway; keep the real credentials outside the repository.
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: /Users/matthewdean/.cloudflared/REPLACE_WITH_TUNNEL_UUID.json
+
+ingress:
+  - hostname: '*.dev.mtdn.dev'
+    service: http://127.0.0.1:45800
+  - service: http_status:404

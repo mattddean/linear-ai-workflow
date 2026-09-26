@@ -14,6 +14,7 @@ resolve from that file's directory, not the tool's installation directory. Witho
 bun run whey --config /absolute/target/.whey.jsonc create feature-name
 bun run whey --config /absolute/target/.whey.jsonc start feature-name
 bun run whey --config /absolute/target/.whey.jsonc open feature-name
+bun run whey --config /absolute/target/.whey.jsonc tunnel feature-name
 bun run whey --config /absolute/target/.whey.jsonc stop feature-name
 bun run whey --config /absolute/target/.whey.jsonc destroy feature-name
 bun run whey --config /absolute/target/.whey.jsonc list
@@ -24,12 +25,14 @@ bun run whey --config /absolute/target/.whey.jsonc list
 - `start` runs configured `start` hooks, then guarded `migrate` hooks, without GUI apps. Junior starts its dedicated
   Postgres/Electric containers, waits for readiness, and applies existing migrations. It does not generate migrations.
 - `open` runs initialization before creating a new Space and launching configured commands/apps. Junior opens API,
-  Expo, worker, and Caddy panes without an additional interactive Codex. A previously recorded Space is reused;
+  Expo, worker, and Caddy through root Turbo dev, alongside database logs and Drizzle Studio panes. A previously recorded Space is reused;
   this is not a process-health check. No builds or app installations are performed by the supplied Junior commands.
 - `stop` closes isolate windows and its Space and runs stop hooks, preserving the snapshot and named database volume.
 - `destroy` runs destruction hooks and removes snapshots, configured browser profiles, and state. Preserve local
   commits and required artifacts first; destruction is never an automatic consequence of PM acceptance.
 - `inspect` returns the identity of a managed isolate as JSON and validates its branch and base ancestry.
+- `tunnel` registers that isolate's API and Expo hosts with the shared local gateway for the lifetime of the command.
+  Junior invokes it from its existing `dev:tunnel` task. See [the Cloudflare setup guide](tunnels.md).
 
 ## Managed ticket creation
 
@@ -75,8 +78,8 @@ development, production, or coordinator databases. Migration generation remains 
 using their own disposable Testcontainers databases, generated URLs, and cleanup lifecycle.
 
 Junior's config uses Bun, per-isolate Compose/Caddy/Expo/API/worker ports, and `EXPO_PUBLIC_API_URL`. Caddy's admin
-endpoint is disabled inside isolates to avoid a shared listener. It launches native development services without the
-shared Cloudflare tunnel. Existing iOS development builds and device/signing prerequisites must already be prepared.
+endpoint is disabled inside isolates to avoid a shared listener. Its shared isolate tunnel routes API and Expo
+hostnames to each running isolate. Existing iOS development builds and device/signing prerequisites must already be prepared.
 
 ## Desktop prerequisites
 
