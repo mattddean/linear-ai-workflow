@@ -108,3 +108,34 @@ test('pause, resume, and acknowledgement persist their control flags', async () 
     }),
   )
 })
+
+test('cancellation survives stale saves and rolls back a racing handoff', async () => {
+  const run = makeRun()
+  const journal: Journal = {
+    assignment: { run, snapshot: fixture(run).state.snapshot, artifactDir: run.workspace },
+    state: 'done',
+    agentStarted: true,
+    result: ready(run),
+    commentId: null,
+    body: null,
+    tokens: 0,
+    elapsedMillis: 0,
+    stepResult: 'continue',
+  }
+  await testRuntime.runPromise(
+    Effect.gen(function* () {
+      const store = yield* Store
+      yield* store.create(run)
+      yield* store.cancel(run.id)
+      expect((yield* store.save({ ...run, status: 'running' }).pipe(Effect.result))._tag).toBe('Failure')
+      expect((yield* store.finish({ run, journal }).pipe(Effect.result))._tag).toBe('Failure')
+      expect(yield* store.journal(run)).toBeNull()
+      expect((yield* store.get(run.id)).status).toBe('canceling')
+      yield* store.save({ ...run, status: 'canceled' })
+      yield* store.cancel(run.id)
+      yield* store.control({ id: run.id, command: 'resume', answer: 'go' })
+      expect((yield* store.save({ ...run, status: 'queued' }).pipe(Effect.result))._tag).toBe('Failure')
+      expect((yield* store.get(run.id)).status).toBe('canceled')
+    }),
+  )
+})

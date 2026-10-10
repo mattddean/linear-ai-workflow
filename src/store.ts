@@ -13,6 +13,7 @@ import { AppError, error } from './domain'
 export class Store extends Context.Service<
   Store,
   {
+    readonly cancel: (id: RunId) => Effect.Effect<void, AppError>
     readonly enroll: (run: Run) => Effect.Effect<boolean, AppError>
     readonly create: (run: Run) => Effect.Effect<void, AppError>
     readonly get: (id: RunId) => Effect.Effect<Run, AppError>
@@ -41,12 +42,27 @@ export class Store extends Context.Service<
         if (!row) return yield* error('storage', 'Run not found')
         return yield* Schema.decodeUnknownEffect(RunData)(row.data)
       }, Effect.mapError(storageError))
+      const writable = (run: Run) =>
+        and(
+          eq(workflow_runs.id, run.id),
+          run.status === 'canceled'
+            ? sql`${workflow_runs.data}->>'status' IN ('canceling', 'canceled')`
+            : sql`${workflow_runs.data}->>'status' NOT IN ('canceling', 'canceled')`,
+        )
+      const confirmWrite = (rows: readonly { id: string }[]) =>
+        rows.length > 0
+          ? Effect.void
+          : Effect.fail(error('canceled', 'Run was canceled; stale assignment write rejected'))
       const save = Effect.fn('Store.save')((run: Run) =>
         db
           .update(workflow_runs)
           .set({ data: Schema.encodeSync(RunData)(run) })
-          .where(eq(workflow_runs.id, run.id))
-          .pipe(Effect.asVoid, Effect.mapError(storageError)),
+          .where(writable(run))
+          .returning({ id: workflow_runs.id })
+          .pipe(
+            Effect.flatMap(confirmWrite),
+            Effect.mapError((failure) => (failure instanceof AppError ? failure : storageError())),
+          ),
       )
       const saveJournal = Effect.fn('Store.saveJournal')((journal: Journal) =>
         db
@@ -63,6 +79,18 @@ export class Store extends Context.Service<
           .pipe(Effect.asVoid, Effect.mapError(storageError)),
       )
       return Store.of({
+        cancel: Effect.fn('Store.cancel')((id) =>
+          db
+            .update(workflow_runs)
+            .set({
+              data: sql`jsonb_set(${workflow_runs.data}, '{status}', '"canceling"'::jsonb)`,
+              pause_requested: true,
+              resume_requested: false,
+              resume_answer: null,
+            })
+            .where(and(eq(workflow_runs.id, id), sql`${workflow_runs.data}->>'status' <> 'canceled'`))
+            .pipe(Effect.asVoid, Effect.mapError(storageError)),
+        ),
         enroll: Effect.fn('Store.enroll')((run) =>
           db
             .transaction((tx) =>
@@ -137,13 +165,15 @@ export class Store extends Context.Service<
                     target: [workflow_assignments.run_id, workflow_assignments.sequence],
                     set: { data: Schema.encodeSync(JournalData)(input.journal) },
                   })
-                yield* tx
+                const updated = yield* tx
                   .update(workflow_runs)
                   .set({ data: Schema.encodeSync(RunData)(input.run) })
-                  .where(eq(workflow_runs.id, input.run.id))
+                  .where(writable(input.run))
+                  .returning({ id: workflow_runs.id })
+                yield* confirmWrite(updated)
               }),
             )
-            .pipe(Effect.mapError(storageError)),
+            .pipe(Effect.mapError((failure) => (failure instanceof AppError ? failure : storageError()))),
         ),
         control: Effect.fn('Store.control')((input) =>
           db

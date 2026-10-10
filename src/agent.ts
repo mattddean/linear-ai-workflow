@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile, rm, open } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
 import type { AgentProgress } from './agent-progress'
-import type { AppError, AgentOutput, Assignment } from './domain'
+import type { AppError, AgentOutput, Assignment, RunId } from './domain'
 
 import { agentProgress } from './agent-progress'
 import { childEnvironment } from './child-environment'
@@ -32,7 +32,7 @@ const groupAlive = Effect.fn('Agent.groupAlive')(function* (pid: number) {
     catch: (cause) =>
       Schema.is(Schema.Struct({ code: Schema.Literal('ESRCH') }))(cause)
         ? error('agent', 'gone')
-        : error('blocked', 'Cannot establish whether the previous process group is still alive'),
+        : error('blocked', `Cannot establish whether process group ${pid} is still alive: ${String(cause)}`),
   }).pipe(
     Effect.catchIf(
       (failure) => failure.message === 'gone',
@@ -83,6 +83,42 @@ export const recoverAgentLease = Effect.fn('Agent.recoverLease')(function* () {
   )
 })
 
+const waitForGroupExit = Effect.fn('Agent.waitForGroupExit')(function* (pid: number) {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const state = yield* groupAlive(pid).pipe(Effect.result)
+    if (state._tag === 'Success' && !state.success) return false
+    // macOS can briefly return EPERM while a terminated process is being reaped.
+    yield* Effect.sleep('100 millis')
+  }
+  return yield* groupAlive(pid)
+})
+
+export const stopCanceledAgent = Effect.fn('Agent.stopCanceled')(function* (
+  id: RunId,
+): Effect.fn.Return<void, AppError, Settings> {
+  const settings = yield* Settings
+  const lock = `${settings.artifactRoot}/agent.lock`
+  const owner = yield* Effect.tryPromise(() => readFile(`${lock}/run-id`, 'utf8')).pipe(Effect.option)
+  if (Option.isNone(owner)) return yield* recoverAgentLease()
+  // A different ticket can be active while this ticket is queued or waiting.
+  if (owner.value !== id) return
+  const text = yield* Effect.tryPromise(() => readFile(`${lock}/pid`, 'utf8')).pipe(
+    Effect.mapError(() => error('blocked', `Cancellation awaits a complete process lease at ${lock}`)),
+  )
+  const pid = Number(text)
+  if (!Number.isSafeInteger(pid) || pid <= 1)
+    return yield* error('blocked', `Invalid process lease at ${lock}; inspect it manually`)
+  if (yield* groupAlive(pid)) {
+    yield* Effect.try(() => process.kill(-pid, 'SIGTERM')).pipe(Effect.ignore)
+    if (yield* waitForGroupExit(pid)) {
+      yield* Effect.try(() => process.kill(-pid, 'SIGKILL')).pipe(Effect.ignore)
+      if (yield* waitForGroupExit(pid))
+        return yield* error('blocked', `Canceled process group ${pid} is still alive; lease retained at ${lock}`)
+    }
+  }
+  yield* recoverAgentLease()
+})
+
 export class Agent extends Context.Service<
   Agent,
   {
@@ -108,6 +144,7 @@ export class Agent extends Context.Service<
           yield* io(() => mkdir(lock))
           let spawned = false
           return yield* Effect.gen(function* () {
+            yield* io(() => writeFile(`${lock}/run-id`, assignment.run.id))
             const shared = yield* io(() => readFile(new URL('../prompts/shared.md', import.meta.url), 'utf8'))
             const prompt = yield* io(() => readFile(new URL(`../prompts/${role}.md`, import.meta.url), 'utf8'))
             const schemaPath = `${dir}/result-schema.json`

@@ -32,6 +32,24 @@ export class Coordinator extends Context.Service<
       const workspace = yield* Workspace
       const settings = yield* Settings
       const gate = yield* Semaphore.make(1)
+      const withAssignment = gate.withPermits(1)
+      const checkActive = Effect.fn('Coordinator.checkActive')(function* (id: RunId) {
+        const run = yield* store.get(id)
+        if (run.status === 'canceling' || run.status === 'canceled')
+          return yield* error('canceled', 'Ticket canceled in Linear')
+        if (yield* linear.isCanceled(run.issueId)) {
+          yield* store.cancel(id)
+          return yield* error('canceled', 'Ticket canceled in Linear')
+        }
+      })
+      const cancellationWatcher = Effect.fn('Coordinator.watchCancellation')(function* (id: RunId) {
+        for (;;) {
+          const run = yield* store.get(id)
+          if (run.status === 'canceling' || run.status === 'canceled')
+            return yield* error('canceled', 'Ticket canceled in Linear')
+          yield* Effect.sleep('1 second')
+        }
+      })
       const pauseWatcher = (id: RunId) =>
         Effect.gen(function* () {
           for (;;) {
@@ -42,8 +60,9 @@ export class Coordinator extends Context.Service<
         })
       return Coordinator.of({
         step: Effect.fn('Coordinator.step')((input) =>
-          gate.withPermits(1)(
+          withAssignment(
             Effect.gen(function* () {
+              yield* checkActive(input.id)
               let current = yield* store.get(input.id)
               // Read the original sequence on replay; a committed handoff may precede the activity checkpoint.
               let journal = yield* store.journal({ ...current, sequence: input.sequence })
@@ -104,12 +123,17 @@ export class Coordinator extends Context.Service<
                 fresh = true
               }
               const publishProgress = Effect.fn('Coordinator.publishProgress')(function* (progress: AgentProgress) {
+                yield* checkActive(input.id)
                 if (journal === null) return yield* error('storage', 'Progress has no assignment journal')
                 let entry = journal.progressComments?.find((item) => item.key === progress.key)
                 if (entry !== undefined && entry.commentId !== null) return
                 if (entry === undefined) {
                   const eventMarker = `<!-- linear-ai-workflow:${current.id}/${input.sequence}/progress/${journal.progressComments?.length ?? 0} -->`
-                  entry = { key: progress.key, body: `${eventMarker}\nDeveloper: ${progress.message}`, commentId: null }
+                  entry = {
+                    key: progress.key,
+                    body: `${eventMarker}\nDeveloper: ${progress.message}`,
+                    commentId: null,
+                  }
                   journal = { ...journal, progressComments: [...(journal.progressComments ?? []), entry] }
                 }
                 yield* store.saveJournal(journal)
@@ -206,6 +230,7 @@ export class Coordinator extends Context.Service<
                   if (journal === null) return yield* error('storage', 'Assignment journal is missing')
                   journal = { ...journal, agentStarted: true }
                   yield* store.saveJournal(journal)
+                  yield* checkActive(input.id)
                   yield* Effect.logInfo('Starting Codex')
                   const output = yield* agent
                     .execute(assignment, run.phase === 'implementation' ? reportProgress : undefined)
@@ -234,13 +259,15 @@ export class Coordinator extends Context.Service<
                   return output
                 }).pipe(
                   Effect.catch((failure) =>
-                    Effect.gen(function* () {
-                      yield* Effect.logError(failure.message)
-                      const log = yield* Effect.tryPromise(() =>
-                        readFile(`${assignment.artifactDir}/events.jsonl`, 'utf8'),
-                      ).pipe(Effect.orElseSucceed(() => ''))
-                      return { result: blocked(run, failure.message), ...countTokenUsage(log) }
-                    }),
+                    failure.kind === 'canceled'
+                      ? Effect.fail(failure)
+                      : Effect.gen(function* () {
+                          yield* Effect.logError(failure.message)
+                          const log = yield* Effect.tryPromise(() =>
+                            readFile(`${assignment.artifactDir}/events.jsonl`, 'utf8'),
+                          ).pipe(Effect.orElseSucceed(() => ''))
+                          return { result: blocked(run, failure.message), ...countTokenUsage(log) }
+                        }),
                   ),
                 )
                 journal = {
@@ -308,6 +335,7 @@ export class Coordinator extends Context.Service<
                   )
               }
               // This is an outbox: retry publication, never regenerate an agent report after an ambiguous write.
+              yield* checkActive(input.id)
               yield* Effect.logInfo('Publishing Linear handoff').pipe(
                 Effect.annotateLogs({ outcome: journal.result.outcome }),
               )
@@ -378,6 +406,12 @@ export class Coordinator extends Context.Service<
               )
               return stepResult
             }).pipe(Effect.scoped),
+          ).pipe(
+            Effect.raceFirst(cancellationWatcher(input.id)),
+            Effect.catchIf(
+              (failure) => failure.kind === 'canceled',
+              () => Effect.succeed('complete' as const),
+            ),
           ),
         ),
       })

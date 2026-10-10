@@ -4,10 +4,10 @@ import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { Agent } from './agent'
+import { Agent, stopCanceledAgent } from './agent'
 import { childEnvironment } from './child-environment'
 import { Settings } from './config'
-import { Path } from './domain'
+import { Path, RunId } from './domain'
 import { fixture, ready, settings } from './test/fixtures'
 import { budgetTokens, countTokenUsage } from './token-usage'
 
@@ -196,6 +196,38 @@ test('Developer public commentary is delivered while its Codex process is still 
     )
     expect(messages).toEqual(['Implementation complete; running checks.'])
     expect(output.result.outcome).toBe('ready')
+  } finally {
+    process.env.PATH = prior
+    await rm(mock.dir, { recursive: true, force: true })
+  }
+}, 10000)
+
+test('ticket cancellation stops only its owned Codex process and preserves artifacts', async () => {
+  const mock = await mockCodex({ hang: true })
+  const prior = process.env.PATH
+  process.env.PATH = `${mock.dir}:${prior ?? ''}`
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const agent = yield* Agent
+        const fiber = yield* agent.execute(mock.assignment).pipe(Effect.result, Effect.forkScoped)
+        while (!(yield* Effect.promise(() => Bun.file(join(mock.dir, 'args.json')).exists())))
+          yield* Effect.sleep('10 millis')
+        yield* stopCanceledAgent(RunId.make(crypto.randomUUID()))
+        expect(yield* Effect.promise(() => Bun.file(join(mock.dir, 'agent.lock', 'pid')).exists())).toBe(true)
+        yield* stopCanceledAgent(mock.assignment.run.id)
+        expect((yield* Fiber.join(fiber))._tag).toBe('Failure')
+        expect(
+          yield* Effect.promise(() => Bun.file(join(mock.assignment.artifactDir, 'assignment.json')).exists()),
+        ).toBe(true)
+        expect(yield* Effect.promise(() => Bun.file(join(mock.dir, 'agent.lock', 'pid')).exists())).toBe(false)
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(mock.layer),
+        Effect.provideService(Settings, { ...settings, artifactRoot: Path.make(mock.dir) }),
+        Effect.timeout('8 seconds'),
+      ),
+    )
   } finally {
     process.env.PATH = prior
     await rm(mock.dir, { recursive: true, force: true })

@@ -524,3 +524,45 @@ test.each([false, true])('existing canonical eyes reaction on comment=%s skips c
   expect(reads).toBe(1)
   expect(writes).toBe(0)
 })
+
+for (const type of ['canceled', 'completed', 'started']) {
+  test(`cancellation reads Linear state type ${type}`, async () => {
+    const f = fixture()
+    const layer = testLayer(
+      fetchImplementation(async (_url, init) => {
+        if (typeof init?.body !== 'string') throw new Error('Expected JSON request')
+        expect(init.body).toContain('state { type }')
+        return Response.json({ data: { issue: { ...f.state.snapshot.issue, state: { type } } } })
+      }),
+    )
+    expect(
+      await Effect.runPromise(
+        Effect.flatMap(Linear, (linear) => linear.isCanceled(f.state.run.issueId)).pipe(Effect.provide(layer)),
+      ),
+    ).toBe(type === 'canceled')
+  })
+}
+
+test('cancellation refuses an issue outside the configured team', async () => {
+  const f = fixture()
+  const layer = testLayer(
+    fetchImplementation(async () =>
+      Response.json({
+        data: {
+          issue: {
+            ...f.state.snapshot.issue,
+            team: { id: crypto.randomUUID() },
+            state: { type: 'canceled' },
+          },
+        },
+      }),
+    ),
+  )
+  const result = await Effect.runPromise(
+    Effect.flatMap(Linear, (linear) => linear.isCanceled(f.state.run.issueId)).pipe(
+      Effect.provide(layer),
+      Effect.result,
+    ),
+  )
+  expect(result._tag).toBe('Failure')
+})

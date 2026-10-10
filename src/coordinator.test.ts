@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test'
-import { Effect, Logger } from 'effect'
+import { Effect, Logger, Layer } from 'effect'
 
+import { Agent } from './agent'
 import { Coordinator } from './coordinator'
 import { CommentId } from './domain'
 import { blocked, humanAnswer, validateResult } from './handoff'
+import { Store } from './store'
 import { fixture, makeRun, ready, settings, sha, userId } from './test/fixtures'
 
 // Verifies role sequencing and recovery gates using fake agents, Linear comments, workspaces, and persistence.
@@ -297,4 +299,48 @@ test('unrecorded progress-looking comments still return work to PM', async () =>
   }
   expect(await execute(f)).toBe('continue')
   expect(f.state.run.phase).toBe('refinement')
+})
+
+test('a canceled Linear ticket cannot begin an assignment or publish an acknowledgement', async () => {
+  const f = fixture()
+  f.state.canceled = true
+  expect(await execute(f)).toBe('complete')
+  expect(f.state.run.status).toBe('canceling')
+  expect(f.state.calls).toBe(0)
+  expect(f.acknowledgements).toHaveLength(0)
+  expect(f.state.posts).toBe(0)
+  expect(f.state.journals.size).toBe(0)
+})
+
+test('persisted cancellation interrupts active work and suppresses its handoff', async () => {
+  const f = fixture()
+  let stopped = false
+  const agent = Agent.of({
+    execute: () =>
+      Effect.gen(function* () {
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            stopped = true
+          }),
+        )
+        yield* f.store.cancel(f.state.run.id)
+        return yield* Effect.never
+      }).pipe(Effect.scoped),
+  })
+  const result = await Effect.runPromise(
+    Effect.flatMap(Coordinator, (coordinator) => coordinator.step({ id: f.state.run.id, sequence: 0 })).pipe(
+      Effect.provide(
+        Coordinator.layer.pipe(
+          Layer.provide(Layer.succeed(Agent, agent)),
+          Layer.provide(f.dependencies),
+          Layer.provide(Layer.succeed(Store, f.store)),
+        ),
+      ),
+      Effect.timeout('4 seconds'),
+    ),
+  )
+  expect(result).toBe('complete')
+  expect(stopped).toBe(true)
+  expect(f.state.run.status).toBe('canceling')
+  expect(f.state.posts).toBe(0)
 })

@@ -2,20 +2,24 @@ import { BunServices } from '@effect/platform-bun'
 import { expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import { Effect, Exit, Layer, Option, Scope } from 'effect'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import type { Comment } from '../domain'
 
+import { Agent } from '../agent'
 import { DiscoverySettings } from '../config'
 import { Coordinator } from '../coordinator'
 import { Db } from '../db/live'
 import { workflow_runs, workflow_assignments } from '../db/schema'
 import { discoverTickets } from '../discovery'
-import { Branch, CommentId, error } from '../domain'
+import { Branch, CommentId, Path, error } from '../domain'
 import { blocked } from '../handoff'
 import { Linear } from '../linear.client'
 import { Store } from '../store'
 import { TestDatabaseLive } from '../test/db'
-import { fixture, makeRun, ready, userId } from '../test/fixtures'
+import { fixture, makeRun, ready, userId, settings } from '../test/fixtures'
 import { TicketWorkflow, TicketWorkflowLive } from '../ticket.workflow'
 import { pollRuns } from '../worker'
 import { clientEngineLayer, ensureWorker, workerEngineLayer, workerGroups } from './workflow-engine'
@@ -195,3 +199,74 @@ test('discovered ticket runs PM to developer to QA to PM despite another ticket 
     ),
   )
 }, 45000)
+
+for (const active of [true, false]) {
+  test(`Linear cancellation stops a ${active ? 'running' : 'blocked'} cluster workflow and prevents resume`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'linear-cancel-workflow-'))
+    const f = fixture(makeRun(), { ...settings, artifactRoot: Path.make(dir) })
+    let started = false
+    let stopped = false
+    const agent = Agent.of({
+      execute: active
+        ? () =>
+            Effect.gen(function* () {
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  stopped = true
+                }),
+              )
+              started = true
+              return yield* Effect.never
+            }).pipe(Effect.scoped)
+        : f.agent.execute,
+    })
+    f.state.agentResult = (run) => blocked(run, 'Need an answer')
+    const dependencies = Layer.merge(f.dependencies, Layer.succeed(Agent, agent)).pipe(
+      Layer.provideMerge(Store.layer),
+      Layer.provideMerge(TestDatabaseLive),
+      Layer.provideMerge(BunServices.layer),
+    )
+    const worker = TicketWorkflowLive.pipe(
+      Layer.provide(Coordinator.layer),
+      Layer.provideMerge(workerEngineLayer({ group: 'local', host: '127.0.0.1', port: 35675 })),
+      Layer.provideMerge(dependencies),
+    )
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const store = yield* Store
+          yield* store.create(f.state.run)
+          const context = yield* Layer.build(worker)
+          yield* TicketWorkflow.execute({ id: f.state.run.id }, { discard: true }).pipe(Effect.provide(context))
+          const get = store.get(f.state.run.id)
+          for (;;) {
+            if (active ? started : (yield* get).status === 'blocked') break
+            yield* Effect.sleep('50 millis')
+          }
+          const posts = f.state.posts
+          const poll = pollRuns('local').pipe(
+            Effect.provide(context),
+            Effect.provideService(Store, { ...store, list: get.pipe(Effect.map((run) => [run])) }),
+          )
+          f.state.canceled = true
+          yield* poll
+          for (;;) {
+            if ((yield* get).status === 'canceled' && (!active || stopped)) break
+            yield* Effect.sleep('50 millis')
+            yield* poll
+          }
+          const calls = f.state.calls
+          yield* store.control({ id: f.state.run.id, command: 'resume', answer: 'continue' })
+          f.state.canceled = false
+          yield* poll
+          expect((yield* get).status).toBe('canceled')
+          expect(f.state.posts).toBe(posts)
+          expect(f.state.calls).toBe(calls)
+          expect(active ? stopped : calls === 1).toBe(true)
+        }).pipe(Effect.scoped, Effect.provide(dependencies), Effect.timeout('20 seconds')),
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 30000)
+}

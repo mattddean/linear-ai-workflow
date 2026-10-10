@@ -104,6 +104,7 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     cachedTokensPerAssignment: 0,
     posts: 0,
     pause: false,
+    canceled: false,
     ambiguous: false,
     ambiguousAcknowledgement: false,
     ambiguousProgress: false,
@@ -134,6 +135,7 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     ),
   )
   const linear = Linear.of({
+    isCanceled: () => Effect.sync(() => state.canceled),
     discover: Effect.succeed([state.snapshot.issue]),
     replies: () => Effect.succeed([]),
     read,
@@ -186,6 +188,10 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     ),
   })
   const store = Store.of({
+    cancel: () =>
+      Effect.sync(() => {
+        if (state.run.status !== 'canceled') state.run = { ...state.run, status: 'canceling' }
+      }),
     enroll: () => Effect.succeed(false),
     create: (run) =>
       Effect.sync(() => {
@@ -195,7 +201,8 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     list: Effect.sync(() => [state.run]),
     save: (run) =>
       Effect.sync(() => {
-        state.run = run
+        if ((state.run.status !== 'canceling' && state.run.status !== 'canceled') || run.status === 'canceled')
+          state.run = run
       }),
     journal: (run) => Effect.sync(() => state.journals.get(run.sequence) ?? null),
     saveJournal: (journal) =>

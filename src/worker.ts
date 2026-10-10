@@ -5,7 +5,7 @@ import { DurableDeferred } from 'effect/unstable/workflow'
 
 import type { CommentId, Run, WorkerGroup } from './domain'
 
-import { recoverAgentLease } from './agent'
+import { recoverAgentLease, stopCanceledAgent } from './agent'
 import { Settings } from './config'
 import { Db } from './db/live'
 import { workflow_runs, workflow_worker_owners } from './db/schema'
@@ -21,6 +21,26 @@ const pollRun = Effect.fn('Worker.pollRun')(function* (run: Run) {
   const store = yield* Store
   const linear = yield* Linear
   const executionId = yield* TicketWorkflow.executionId({ id: run.id })
+  if (run.status === 'canceling' || (yield* linear.isCanceled(run.issueId))) {
+    yield* store.cancel(run.id)
+    // Stop the owned process even if an old malformed workflow reply prevents interrupt delivery.
+    yield* stopCanceledAgent(run.id)
+    yield* TicketWorkflow.interrupt(executionId)
+    // A durable interrupt is a request; verify process cleanup before marking cancellation complete.
+    yield* stopCanceledAgent(run.id)
+    const canceled = yield* store.get(run.id)
+    yield* store.save({
+      ...canceled,
+      status: 'canceled',
+      answer: null,
+      question: null,
+      waitSequence: null,
+      responseCommentId: undefined,
+      updatedAt: new Date().toISOString(),
+    })
+    yield* Effect.logInfo('Ticket canceled; local work stopped and isolate preserved')
+    return
+  }
   if ((run.status === 'blocked' || run.status === 'paused') && run.waitSequence !== null) {
     const command = yield* controls(run.id)
     let answer = command.resume_answer
@@ -83,7 +103,13 @@ export const pollRuns = Effect.fn('Worker.pollRuns')(function* (group: WorkerGro
   const settings = yield* Settings
   const runs = yield* store.list
   yield* Effect.forEach(
-    runs.filter((run) => run.workerGroup === group && run.workerId === settings.workerId && run.status !== 'approved'),
+    runs.filter(
+      (run) =>
+        run.workerGroup === group &&
+        run.workerId === settings.workerId &&
+        run.status !== 'approved' &&
+        run.status !== 'canceled',
+    ),
     (run) =>
       pollRun(run).pipe(
         // catchCause rather than catch to catch not only errors but also defects.
@@ -140,7 +166,7 @@ export const acquireWorkerLock = Effect.fn('Worker.acquireLock')(function* (grou
           and(
             expression`${workflow_runs.data}->>'worker_group' = ${group}`,
             expression`${workflow_runs.data}->>'worker_id' <> ${settings.workerId}`,
-            expression`${workflow_runs.data}->>'status' <> 'approved'`,
+            expression`${workflow_runs.data}->>'status' NOT IN ('approved', 'canceled')`,
           ),
         )
         .limit(1)

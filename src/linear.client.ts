@@ -12,6 +12,9 @@ const Page = Schema.Struct({
   nodes: Schema.Array(Comment),
   pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean, endCursor: Schema.NullOr(Schema.String) }),
 })
+const StateResponse = Schema.Struct({
+  issue: Schema.Struct({ id: Issue.fields.id, team: Issue.fields.team, state: Schema.Struct({ type: Schema.String }) }),
+})
 const IssueResponse = Schema.Struct({ issue: Issue })
 const CommentsResponse = Schema.Struct({ issue: Schema.Struct({ comments: Page }) })
 const RepliesResponse = Schema.Struct({
@@ -63,6 +66,7 @@ const commentFields = 'id body createdAt user { id }'
 export class Linear extends Context.Service<
   Linear,
   {
+    readonly isCanceled: (id: IssueId) => Effect.Effect<boolean, AppError>
     readonly discover: Effect.Effect<readonly Issue[], AppError>
     readonly read: (id: IssueId | typeof IssueKey.Type) => Effect.Effect<Snapshot, AppError>
     readonly replies: (input: { issueId: IssueId; commentId: CommentId }) => Effect.Effect<readonly Comment[], AppError>
@@ -266,6 +270,16 @@ export class Linear extends Context.Service<
         return comment
       })
       return Linear.of({
+        isCanceled: Effect.fn('Linear.isCanceled')(function* (id) {
+          const { issue } = yield* readRequest({
+            schema: StateResponse,
+            query: 'query IssueState($id: String!) { issue(id: $id) { id team { id } state { type } } }',
+            variables: { id },
+          })
+          if (issue.id !== id || issue.team.id !== settings.teamId)
+            return yield* error('linear', 'Issue is outside the enrolled issue and configured team')
+          return issue.state.type === 'canceled'
+        }),
         discover: discover(),
         acknowledge,
         replies,

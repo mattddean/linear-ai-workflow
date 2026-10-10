@@ -33,6 +33,7 @@ export class AppError extends Schema.TaggedError<AppError>()('AppError', {
     'agent',
     'blocked',
     'invalid',
+    'canceled',
   ]),
   message: Schema.String,
 }) {}
@@ -85,7 +86,7 @@ export const Run = Schema.Struct({
   refinementCommentId: Schema.NullOr(CommentId),
   predecessorId: Schema.NullOr(CommentId),
   phase: Phase,
-  status: Schema.Literals(['queued', 'running', 'blocked', 'paused', 'approved']),
+  status: Schema.Literals(['queued', 'running', 'blocked', 'paused', 'approved', 'canceling', 'canceled']),
   sequence: Schema.Int,
   attempts: Schema.Int,
   tokens: Schema.Int,
