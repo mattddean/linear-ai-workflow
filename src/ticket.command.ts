@@ -3,7 +3,8 @@ import { Argument, Command, Flag } from 'effect/unstable/cli'
 
 import { recoverAgentLease } from './agent'
 import { Settings } from './config'
-import { RunId, error } from './domain'
+import { BudgetOverrides, RunId, error } from './domain'
+import { extendBudget, resolveBudget } from './run-budget'
 import { Store } from './store'
 import { budgetTokens } from './token-usage'
 import { Workspace } from './workspace'
@@ -15,13 +16,24 @@ export const statusCommand = Command.make('status', { id: idArgument }, ({ id })
   Effect.gen(function* () {
     const store = yield* Store
     const run = yield* store.get(yield* Schema.decodeUnknownEffect(RunId)(id))
-    yield* Console.log(JSON.stringify({ ...run, budgetTokens: budgetTokens(run) }, null, 2))
+    const settings = yield* Settings
+    yield* Console.log(
+      JSON.stringify({ ...run, ...resolveBudget(run, settings), budgetTokens: budgetTokens(run) }, null, 2),
+    )
   }),
 )
 export const listCommand = Command.make('list', {}, () =>
   Effect.gen(function* () {
     const store = yield* Store
-    yield* Console.log(JSON.stringify(yield* store.list, null, 2))
+    const settings = yield* Settings
+    const runs = yield* store.list
+    yield* Console.log(
+      JSON.stringify(
+        runs.map((run) => ({ ...run, ...resolveBudget(run, settings), budgetTokens: budgetTokens(run) })),
+        null,
+        2,
+      ),
+    )
   }),
 )
 export const pauseCommand = Command.make('pause', { id: idArgument }, ({ id }) =>
@@ -55,6 +67,13 @@ export const resumeCommand = Command.make(
         return yield* error('invalid', 'Only blocked or paused runs can resume')
       if (![input.extraTokens, input.extraMinutes, input.extraAttempts].every((n) => Number.isSafeInteger(n) && n >= 0))
         return yield* error('invalid', 'Budget extensions must be non-negative integers')
+      const budgetOverrides = yield* Schema.decodeUnknownEffect(BudgetOverrides)(
+        extendBudget(run, settings, {
+          maxTokens: input.extraTokens,
+          maxMinutes: input.extraMinutes,
+          maxAttempts: input.extraAttempts,
+        }),
+      ).pipe(Effect.mapError(() => error('invalid', 'Extended limits must be positive safe integers')))
       yield* recoverAgentLease()
       yield* workspace.prepare(run)
       const head = yield* workspace.inspect(run)
@@ -67,9 +86,7 @@ export const resumeCommand = Command.make(
         ...run,
         commitSha: input.acceptHead ? head : run.commitSha,
         phase: input.acceptHead && run.refinementCommentId !== null ? 'implementation' : run.phase,
-        maxTokens: run.maxTokens + input.extraTokens,
-        maxMinutes: run.maxMinutes + input.extraMinutes,
-        maxAttempts: run.maxAttempts + input.extraAttempts,
+        ...(Object.keys(budgetOverrides).length > 0 ? { budgetOverrides } : {}),
       })
       yield* store.control({ id: run.id, command: 'resume', answer: input.answer || null })
       yield* Console.log('Resume requested; the worker will reconcile the pending handoff before continuing.')

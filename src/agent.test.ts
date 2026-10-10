@@ -139,3 +139,35 @@ test('budget counts uncached input plus output across completed turns, without a
   expect(usage).toEqual({ tokens: 2550, cachedTokens: 2300 })
   expect(budgetTokens(usage)).toBe(250)
 })
+
+for (const override of [undefined, 20]) {
+  test(`runner timeout uses ${override === undefined ? 'configured minutes' : 'an explicit minute override'}`, async () => {
+    const mock = await mockCodex({ hang: true })
+    const prior = process.env.PATH
+    process.env.PATH = `${mock.dir}:${prior ?? ''}`
+    const allowedMinutes = override ?? settings.maxMinutes
+    try {
+      const result = await Effect.runPromise(
+        Effect.flatMap(Agent, (agent) =>
+          agent.execute({
+            ...mock.assignment,
+            run: {
+              ...mock.assignment.run,
+              activeMillis: allowedMinutes * 60000 - 100,
+              ...(override === undefined ? {} : { budgetOverrides: { maxMinutes: override } }),
+            },
+          }),
+        ).pipe(Effect.provide(mock.layer), Effect.result),
+      )
+      expect(result._tag).toBe('Failure')
+      if (result._tag === 'Failure') {
+        expect(result.failure.kind).toBe('blocked')
+        expect(result.failure.message).toContain(`${allowedMinutes} active minutes allowed`)
+      }
+      expect(await Bun.file(join(mock.dir, 'agent.lock', 'pid')).exists()).toBe(false)
+    } finally {
+      process.env.PATH = prior
+      await rm(mock.dir, { recursive: true, force: true })
+    }
+  })
+}

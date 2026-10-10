@@ -19,6 +19,9 @@ export class Settings extends Context.Service<
     readonly runnerHost: string
     readonly runnerPort: number
     readonly pollSeconds: number
+    readonly maxAttempts: number
+    readonly maxTokens: number
+    readonly maxMinutes: number
   }
 >()('linear-ai-workflow/config/Settings') {
   static readonly layer = Layer.succeed(Settings, {
@@ -31,6 +34,9 @@ export class Settings extends Context.Service<
     isolateRoot: Path.make(env.ISOLATE_ROOT),
     artifactRoot: Path.make(env.ARTIFACT_ROOT),
     pollSeconds: env.POLL_SECONDS,
+    maxAttempts: env.RUN_MAX_ATTEMPTS,
+    maxTokens: env.RUN_MAX_TOKENS,
+    maxMinutes: env.RUN_MAX_MINUTES,
   })
 }
 

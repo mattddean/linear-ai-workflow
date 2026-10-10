@@ -185,7 +185,10 @@ test('discovered ticket runs PM to developer to QA to PM despite another ticket 
       yield* store.save({ ...stranded, status: 'approved' })
     }).pipe(
       Effect.scoped,
-      Effect.provideService(DiscoverySettings, { repo: f.state.run.repo, base: Branch.make('main') }),
+      Effect.provideService(DiscoverySettings, {
+        repo: f.state.run.repo,
+        base: Branch.make('main'),
+      }),
       Effect.provideService(Linear, linear),
       Effect.provide(dependencies),
       Effect.timeout('30 seconds'),

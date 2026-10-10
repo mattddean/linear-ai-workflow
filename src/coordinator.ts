@@ -17,6 +17,7 @@ import {
   validateResult,
 } from './handoff'
 import { Linear } from './linear.client'
+import { resolveBudget } from './run-budget'
 import { Store } from './store'
 import { budgetTokens, countTokenUsage } from './token-usage'
 import { Workspace } from './workspace'
@@ -133,15 +134,24 @@ export class Coordinator extends Context.Service<
                       tokens: 0,
                       cachedTokens: 0,
                     }
-                  if (
-                    budgetTokens(run) >= run.maxTokens ||
-                    run.activeMillis >= run.maxMinutes * 60000 ||
-                    (run.phase === 'implementation' && run.attempts >= run.maxAttempts)
-                  ) {
+                  const limits = resolveBudget(run, settings)
+                  const exhausted: string[] = []
+                  const chargedTokens = budgetTokens(run)
+                  if (chargedTokens >= limits.maxTokens)
+                    exhausted.push(`tokens ${chargedTokens}/${limits.maxTokens} (resume --extra-tokens)`)
+                  if (run.activeMillis >= limits.maxMinutes * 60000)
+                    exhausted.push(
+                      `active minutes ${Math.ceil(run.activeMillis / 60000)}/${limits.maxMinutes} (resume --extra-minutes)`,
+                    )
+                  if (run.phase === 'implementation' && run.attempts >= limits.maxAttempts)
+                    exhausted.push(
+                      `implementation attempts ${run.attempts}/${limits.maxAttempts} (resume --extra-attempts)`,
+                    )
+                  if (exhausted.length > 0) {
                     return {
                       result: blocked(
                         run,
-                        'Run budget exhausted. Review the reports and extend the relevant limit with resume before continuing.',
+                        `Run budget exhausted: ${exhausted.join('; ')}. Review the reports and extend each exhausted limit with a positive amount before continuing.`,
                       ),
                       tokens: 0,
                       cachedTokens: 0,

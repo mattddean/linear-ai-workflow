@@ -28,9 +28,6 @@ const legacyJournal = {
       sequence: 0,
       attempts: 0,
       tokens: 0,
-      max_attempts: 3,
-      max_tokens: 1000,
-      max_minutes: 10,
       active_millis: 0,
       note: '',
       question: null,
@@ -71,7 +68,13 @@ const legacyJournal = {
 }
 
 test('legacy journal JSON decodes domain names and preserves persisted keys with optional fields absent', () => {
-  const decoded = Schema.decodeUnknownSync(JournalData)(legacyJournal)
+  const decoded = Schema.decodeUnknownSync(JournalData)({
+    ...legacyJournal,
+    assignment: {
+      ...legacyJournal.assignment,
+      run: { ...legacyJournal.assignment.run, max_attempts: 3, max_tokens: 1000, max_minutes: 10 },
+    },
+  })
   expect(decoded.assignment.run.workerGroup).toBe('local')
   strictEqual(decoded.assignment.run.baseSha, 'a'.repeat(40))
   strictEqual(decoded.assignment.artifactDir, '/artifacts')
@@ -88,12 +91,18 @@ test('journal round-trip preserves optional token counts and response comment id
     cached_tokens: 2,
     assignment: {
       ...legacyJournal.assignment,
-      run: { ...legacyJournal.assignment.run, cached_tokens: 3, response_comment_id: legacyId },
+      run: {
+        ...legacyJournal.assignment.run,
+        cached_tokens: 3,
+        response_comment_id: legacyId,
+        budget_overrides: { max_attempts: 8 },
+      },
     },
   }
   const decoded = Schema.decodeUnknownSync(JournalData)(payload)
   expect(decoded.cachedTokens).toBe(2)
   expect(decoded.assignment.run.cachedTokens).toBe(3)
+  expect(decoded.assignment.run.budgetOverrides).toEqual({ maxAttempts: 8 })
   strictEqual(decoded.assignment.run.responseCommentId, legacyId)
   deepStrictEqual(Schema.encodeSync(JournalData)(decoded), payload)
 })

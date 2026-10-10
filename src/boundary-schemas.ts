@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-import { Comment, Issue, Result, Run, Assignment, Journal } from './domain'
+import { Comment, Issue, Result, Run, Assignment, Journal, BudgetOverrides } from './domain'
 
 // Converts snake_case persisted JSON payloads to the typed camelCase domain model and back.
 
@@ -30,7 +30,11 @@ export const ResultData = Result.pipe(
   }),
 )
 
-export const RunData = Run.pipe(
+const BudgetOverridesData = BudgetOverrides.pipe(
+  Schema.encodeKeys({ maxAttempts: 'max_attempts', maxTokens: 'max_tokens', maxMinutes: 'max_minutes' }),
+)
+
+export const RunData = Schema.Struct({ ...Run.fields, budgetOverrides: Schema.optional(BudgetOverridesData) }).pipe(
   Schema.encodeKeys({
     cachedTokens: 'cached_tokens',
     workerGroup: 'worker_group',
@@ -41,9 +45,7 @@ export const RunData = Run.pipe(
     commitSha: 'commit_sha',
     refinementCommentId: 'refinement_comment_id',
     predecessorId: 'predecessor_id',
-    maxAttempts: 'max_attempts',
-    maxTokens: 'max_tokens',
-    maxMinutes: 'max_minutes',
+    budgetOverrides: 'budget_overrides',
     activeMillis: 'active_millis',
     waitSequence: 'wait_sequence',
     responseCommentId: 'response_comment_id',

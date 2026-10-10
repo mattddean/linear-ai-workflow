@@ -39,6 +39,9 @@ const startDatabase = Effect.fn('Test.startDatabase')(function* () {
     WORKFLOW_RUNNER_HOST: '127.0.0.1',
     WORKFLOW_RUNNER_PORT: '34542',
     POLL_SECONDS: '1',
+    RUN_MAX_ATTEMPTS: '6',
+    RUN_MAX_TOKENS: '5000000',
+    RUN_MAX_MINUTES: '480',
     ISOLATE_ROOT: '/tmp/isolates',
     ARTIFACT_ROOT: '/tmp/artifacts',
   })

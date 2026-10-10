@@ -9,6 +9,7 @@ import { childEnvironment } from './child-environment'
 import { Settings } from './config'
 import { Result, error } from './domain'
 import { roleFor } from './handoff'
+import { resolveBudget } from './run-budget'
 import { countTokenUsage } from './token-usage'
 
 // Runs a role-specific Codex assignment with structured output, usage accounting, and a recoverable process lease.
@@ -192,7 +193,8 @@ export class Agent extends Context.Service<
               inputFailed = true
             })
             child.stdin?.end(input)
-            const remaining = Math.max(1, assignment.run.maxMinutes * 60000 - assignment.run.activeMillis)
+            const limits = resolveBudget(assignment.run, settings)
+            const remaining = Math.max(1, limits.maxMinutes * 60000 - assignment.run.activeMillis)
             const code = yield* Effect.tryPromise({
               try: () => waitForExit(child),
               catch: () => error('agent', 'Codex process failed to start'),
@@ -201,7 +203,10 @@ export class Agent extends Context.Service<
                 duration: remaining,
                 orElse: () =>
                   Effect.fail(
-                    error('blocked', 'Run time budget exhausted; review progress and resume with a larger budget'),
+                    error(
+                      'blocked',
+                      `Run time budget exhausted: ${limits.maxMinutes} active minutes allowed. Review progress and resume with --extra-minutes <positive amount>.`,
+                    ),
                   ),
               }),
             )

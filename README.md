@@ -170,6 +170,8 @@ QA independently verifies the reviewed commit and maps every acceptance criterio
 
 QA does not modify implementation source. Missing infrastructure, required device checks, or human confirmation produces a blocker rather than a pass. Every implementation revision returns through QA before PM acceptance.
 
+Run limits default to 6 implementation attempts, 5,000,000 uncached input/output tokens, and 480 active minutes across the complete PM → Developer → QA → PM cycle, including rework. Configure `RUN_MAX_ATTEMPTS`, `RUN_MAX_TOKENS`, and `RUN_MAX_MINUTES` in `.env` and restart both coordinator and worker. New and existing runs use those settings; only usage counters are recorded on each run by default. Legacy saved limits are ignored. `resume --extra-attempts`, `--extra-tokens`, and `--extra-minutes` extend the effective limit and persist an explicit override for that dimension; other dimensions continue to follow configuration. Status and list output show effective limits. Changing configuration does not automatically resume a blocked run; request `resume` after reviewing its reports. Budget blockers identify the exhausted limits and the corresponding resume flags.
+
 Token limits count uncached input plus output. Cached input is tracked separately as `cachedTokens` (`cached_tokens` in persisted JSON); `tokens` retains total input plus output for auditing. Status output and progress logs expose `budgetTokens`, the amount compared with `maxTokens`. Reasoning tokens are already included in output and are not added again. Saved usage without cache information is conservatively counted in full.
 
 ## Local progress logs

@@ -77,10 +77,13 @@ test('discovery persists configured work offline and picks up labels added on a 
         worker_id: settings.workerId,
         status: 'queued',
         phase: 'refinement',
-        max_attempts: 3,
-        max_minutes: 120,
-        max_tokens: 1000000,
       })
+      for (const row of rows) {
+        expect(row.data).not.toHaveProperty('max_attempts')
+        expect(row.data).not.toHaveProperty('max_minutes')
+        expect(row.data).not.toHaveProperty('max_tokens')
+        expect(row.data).not.toHaveProperty('budget_overrides')
+      }
       expect(rows.find((row) => row.issue_id === second.state.run.issueId)?.data.base_sha).toBe(baseSha)
       expect(f.state.calls).toBe(0)
       const [owner] = yield* db
@@ -97,7 +100,10 @@ test('discovery persists configured work offline and picks up labels added on a 
     }).pipe(
       Effect.provideService(Linear, { ...f.linear, discover: Effect.sync(() => [...issues]) }),
       Effect.provideService(Workspace, workspace),
-      Effect.provideService(DiscoverySettings, { repo: f.state.run.repo, base: Branch.make('main') }),
+      Effect.provideService(DiscoverySettings, {
+        repo: f.state.run.repo,
+        base: Branch.make('main'),
+      }),
       Effect.provide(f.dependencies),
     ),
   )
@@ -129,7 +135,10 @@ test('watcher retries failed discovery and finds tickets that arrive after start
     }).pipe(
       Effect.scoped,
       Effect.provideService(Linear, { ...f.linear, discover }),
-      Effect.provideService(DiscoverySettings, { repo: f.state.run.repo, base: Branch.make('main') }),
+      Effect.provideService(DiscoverySettings, {
+        repo: f.state.run.repo,
+        base: Branch.make('main'),
+      }),
       Effect.provide(f.dependencies),
       Effect.timeout('5 seconds'),
     ),

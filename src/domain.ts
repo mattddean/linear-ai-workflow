@@ -65,6 +65,12 @@ export const Issue = Schema.Struct({
 export type Issue = typeof Issue.Type
 export const Snapshot = Schema.Struct({ issue: Issue, comments: Schema.Array(Comment) })
 export type Snapshot = typeof Snapshot.Type
+export const BudgetOverrides = Schema.Struct({
+  maxAttempts: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }))),
+  maxTokens: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }))),
+  maxMinutes: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }))),
+})
+export type BudgetOverrides = typeof BudgetOverrides.Type
 export const Run = Schema.Struct({
   id: RunId,
   workerGroup: WorkerGroup,
@@ -84,9 +90,7 @@ export const Run = Schema.Struct({
   attempts: Schema.Int,
   tokens: Schema.Int,
   cachedTokens: Schema.optional(Schema.Int),
-  maxAttempts: Schema.Int,
-  maxTokens: Schema.Int,
-  maxMinutes: Schema.Int,
+  budgetOverrides: Schema.optional(BudgetOverrides),
   activeMillis: Schema.Number,
   note: Schema.String,
   question: Schema.NullOr(Schema.String),

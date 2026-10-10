@@ -47,9 +47,6 @@ export function makeRun(): Run {
     attempts: 0,
     tokens: 0,
     cachedTokens: 0,
-    maxAttempts: 3,
-    maxTokens: 10000,
-    maxMinutes: 10,
     activeMillis: 0,
     note: '',
     question: null,
@@ -65,6 +62,9 @@ export const settings = {
   isolateRoot: Path.make('/tmp/isolates'),
   artifactRoot: Path.make('/tmp/artifacts'),
   pollSeconds: 1,
+  maxAttempts: 3,
+  maxTokens: 10000,
+  maxMinutes: 10,
   workerId: WorkerId.make('test-machine'),
   workerGroup: 'local' as const,
   runnerHost: '127.0.0.1',
@@ -95,7 +95,7 @@ export function ready(run: Run): Result {
     report: 'Verified AC-1 with evidence.',
   }
 }
-export function fixture(initial = makeRun()) {
+export function fixture(initial = makeRun(), configured: Settings['Service'] = settings) {
   const state = {
     run: initial,
     journals: new Map<number, Journal>(),
@@ -209,7 +209,7 @@ export function fixture(initial = makeRun()) {
   const dependencies = Layer.mergeAll(
     Layer.succeed(Agent, agent),
     Layer.succeed(Workspace, workspace),
-    Layer.succeed(Settings, settings),
+    Layer.succeed(Settings, configured),
     Layer.succeed(Linear, linear),
   )
   const layer = Coordinator.layer.pipe(Layer.provide(dependencies), Layer.provide(Layer.succeed(Store, store)))

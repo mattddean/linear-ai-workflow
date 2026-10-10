@@ -4,7 +4,7 @@ import { Effect, Logger } from 'effect'
 import { Coordinator } from './coordinator'
 import { CommentId } from './domain'
 import { blocked, humanAnswer, validateResult } from './handoff'
-import { fixture, makeRun, ready, sha, userId } from './test/fixtures'
+import { fixture, makeRun, ready, settings, sha, userId } from './test/fixtures'
 
 // Verifies role sequencing and recovery gates using fake agents, Linear comments, workspaces, and persistence.
 
@@ -58,6 +58,14 @@ test('budget exhaustion blocks without calling the agent', async () => {
   const f = fixture({ ...makeRun(), tokens: 10000 })
   expect(await execute(f)).toBe('wait')
   expect(f.state.calls).toBe(0)
+  expect(f.comments.at(-1)?.body).toContain('tokens 10000/10000 (resume --extra-tokens)')
+})
+
+test('time exhaustion identifies the limit without calling the agent', async () => {
+  const f = fixture({ ...makeRun(), activeMillis: 600000 })
+  expect(await execute(f)).toBe('wait')
+  expect(f.state.calls).toBe(0)
+  expect(f.comments.at(-1)?.body).toContain('active minutes 10/10 (resume --extra-minutes)')
 })
 
 test('interrupted assignment requires human reconciliation and never repeats code automatically', async () => {
@@ -144,6 +152,7 @@ test('budget-blocked implementation does not consume another attempt', async () 
   expect(await execute(f)).toBe('wait')
   expect(f.state.run.attempts).toBe(3)
   expect(f.state.calls).toBe(1)
+  expect(f.comments.at(-1)?.body).toContain('implementation attempts 3/3 (resume --extra-attempts)')
 })
 
 test('acknowledgements reconcile after an ambiguous write before executing the agent', async () => {
@@ -213,12 +222,38 @@ test('local progress logs identify the ticket and role through assignment and ha
 })
 
 test('cached input does not exhaust the execution budget and remains tracked separately', async () => {
-  const f = fixture({ ...makeRun(), tokens: 12000, cachedTokens: 11000, maxTokens: 10000 })
+  const f = fixture({ ...makeRun(), tokens: 12000, cachedTokens: 11000 })
   expect(await execute(f)).toBe('continue')
   expect(f.state.calls).toBe(1)
   expect(f.state.run.tokens).toBe(12100)
   expect(f.state.run.cachedTokens).toBe(11000)
-  const exhausted = fixture({ ...makeRun(), tokens: 12000, cachedTokens: 2000, maxTokens: 10000 })
+  const exhausted = fixture({ ...makeRun(), tokens: 12000, cachedTokens: 2000 })
   expect(await execute(exhausted)).toBe('wait')
   expect(exhausted.state.calls).toBe(0)
+})
+
+test('an existing run uses changed configuration while retaining its usage counters', async () => {
+  const prepared = fixture()
+  await execute(prepared)
+  const run = { ...prepared.state.run, tokens: 10000, activeMillis: 600000, attempts: 3 }
+  const blockedRun = fixture(run)
+  expect(await execute(blockedRun)).toBe('wait')
+  const reconfigured = fixture(run, { ...settings, maxTokens: 20000, maxMinutes: 20, maxAttempts: 6 })
+  reconfigured.comments.push(...prepared.comments)
+  expect(await execute(reconfigured)).toBe('continue')
+  expect(reconfigured.state.calls).toBe(1)
+  expect(reconfigured.state.run.tokens).toBe(10100)
+  expect(reconfigured.state.run.attempts).toBe(4)
+  expect(run.attempts).toBe(3)
+})
+
+test('an explicit token override is enforced while time follows configuration', async () => {
+  const f = fixture(
+    { ...makeRun(), tokens: 10000, activeMillis: 600000, budgetOverrides: { maxTokens: 10000 } },
+    { ...settings, maxTokens: 20000, maxMinutes: 20 },
+  )
+  expect(await execute(f)).toBe('wait')
+  expect(f.state.calls).toBe(0)
+  expect(f.comments.at(-1)?.body).toContain('tokens 10000/10000')
+  expect(f.comments.at(-1)?.body).not.toContain('active minutes')
 })
