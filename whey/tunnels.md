@@ -3,8 +3,8 @@
 Junior uses its ordinary `bun run dev` command. In a Whey isolate, the `dev:tunnel` Turbo task registers two
 hostnames with a single shared local gateway:
 
-- `https://api-RUN_ID.dev.mtdn.dev` forwards to that isolate's API port.
-- `https://expo-RUN_ID.dev.mtdn.dev` forwards to that isolate's Expo/Metro port, including WebSockets.
+- `https://api-RUN_ID.mtdn.dev` forwards to that isolate's API port.
+- `https://expo-RUN_ID.mtdn.dev` forwards to that isolate's Expo/Metro port, including WebSockets.
 
 The gateway listens only on `127.0.0.1:45800`. One named Cloudflare Tunnel connects it to the Internet.
 Registration uses a private Unix socket, never a publicly routed HTTP endpoint. Only running, registered
@@ -12,19 +12,18 @@ isolates are routed; unknown hosts receive 404. Database and Drizzle Studio port
 
 ## One-time Cloudflare setup
 
-1. In the `mtdn.dev` zone, ensure an active edge certificate covers `*.dev.mtdn.dev`. Universal SSL for
-   `mtdn.dev` does not cover this second-level wildcard. An Advanced Certificate with that wildcard is one
-   option; it may require a paid Cloudflare add-on. Wait for certificate issuance before testing devices.
+1. In the `mtdn.dev` zone, ensure Universal SSL is active and covers `*.mtdn.dev`. Isolate hostnames use
+   one subdomain level so the existing certificate covers them without an Advanced Certificate add-on.
 2. Create a **locally managed** tunnel from this Mac (the CLI is already installed):
 
    ```sh
    cloudflared tunnel login
    cloudflared tunnel create junior-isolates
-   cloudflared tunnel route dns junior-isolates '*.dev.mtdn.dev'
+   cloudflared tunnel route dns junior-isolates '*.mtdn.dev'
    ```
 
    The last command creates a proxied wildcard CNAME to `TUNNEL_UUID.cfargotunnel.com`. You can instead add
-   that CNAME in Cloudflare DNS: name `*.dev`, target `TUNNEL_UUID.cfargotunnel.com`, proxy enabled.
+   that CNAME in Cloudflare DNS: name `*`, target `TUNNEL_UUID.cfargotunnel.com`, proxy enabled.
    Use a dedicated tunnel for this gateway; leave `junior-api-dev` and its existing DNS record unchanged.
 
 3. Copy [cloudflared.example.yml](cloudflared.example.yml) to `~/.cloudflared/junior-isolates.yml`.
@@ -34,7 +33,7 @@ isolates are routed; unknown hosts receive 404. Database and Drizzle Studio port
 
    ```sh
    cloudflared tunnel --config ~/.cloudflared/junior-isolates.yml ingress validate
-   cloudflared tunnel --config ~/.cloudflared/junior-isolates.yml ingress rule https://api-check.dev.mtdn.dev
+   cloudflared tunnel --config ~/.cloudflared/junior-isolates.yml ingress rule https://api-check.mtdn.dev
    ```
 
 The wildcard rule must forward to **HTTP** `127.0.0.1:45800`, preserve the Host header, and precede the 404
@@ -47,10 +46,10 @@ from connecting unless that client is separately configured to satisfy Access.
 
 ## Running and switching isolates
 
-Use Whey `start`/`open` with Junior's source `.whey.jsonc`. Whey writes `EXPO_PUBLIC_API_URL` and
-`EXPO_PACKAGER_PROXY_URL` into the isolate environment before launching `bun run dev`. The latter tells
-Expo to advertise its public URL in the development-client QR code. Open that isolate's Expo link in the
-existing Junior development build on the phone. The tunnel command prints both URLs in Turbo's tunnel pane.
+Use Whey `start`/`open` with Junior's source `.whey.jsonc`. Whey writes `EXPO_PUBLIC_API_URL` into the isolate environment before launching `bun run dev`. Keep
+`EXPO_PACKAGER_PROXY_URL` empty so Expo advertises its normal LAN address; the phone must be able to reach
+the Mac over the local network. Open that isolate's Expo link in the existing Junior development build
+on the phone. The gateway also registers an Expo route, but local development does not use it.
 
 The first `dev:tunnel` task starts the shared gateway and connector in the background. Further isolates
 attach to that gateway. A duplicate task for the same isolate fails instead of replacing its live routes.
