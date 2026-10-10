@@ -55,11 +55,11 @@ export class GraphQLClient extends Context.Service<
             yield* Effect.sleep(`${Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 300) : 30} seconds`)
             return yield* error('transport', 'GraphQL rate limit reached')
           }
-          if (response.status < 200 || response.status >= 300)
-            return yield* error(
-              response.status >= 500 ? 'transport' : 'linear',
-              `GraphQL returned HTTP ${response.status}`,
-            )
+          const failedStatus = response.status < 200 || response.status >= 300
+          const httpFailure = error(
+            response.status >= 500 ? 'transport' : 'linear',
+            `GraphQL returned HTTP ${response.status}`,
+          )
           const text = yield* response.text.pipe(
             Effect.mapError(() => error('transport', 'Unable to read GraphQL response')),
             Effect.timeoutOrElse({
@@ -68,13 +68,14 @@ export class GraphQLClient extends Context.Service<
             }),
           )
           const envelope = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Envelope))(text).pipe(
-            Effect.mapError(() => error('linear', 'Invalid GraphQL response')),
+            Effect.mapError(() => (failedStatus ? httpFailure : error('linear', 'Invalid GraphQL response'))),
           )
           if (envelope.errors?.length)
             return yield* error(
-              'linear',
+              response.status >= 500 ? 'transport' : 'linear',
               `GraphQL: ${envelope.errors.map((item) => item.extensions?.userPresentableMessage ?? item.message).join('; ')}`,
             )
+          if (failedStatus) return yield* httpFailure
           return yield* Schema.decodeUnknownEffect(input.schema)(envelope.data).pipe(
             Effect.mapError(() =>
               error('linear', 'Invalid GraphQL operation data; reconcile mutations before retrying'),

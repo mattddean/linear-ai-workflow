@@ -443,3 +443,51 @@ test.each(['confirmed', 'rejected', 'unconfirmed', 'wrong-issue', 'wrong-team'])
     expect(writes).toBe(scenario.startsWith('wrong-') ? 0 : 1)
   },
 )
+
+test('HTTP 400 retains Linear reaction permission errors', async () => {
+  const layer = testLayer(
+    fetchImplementation(async () =>
+      Response.json(
+        {
+          errors: [{ message: 'Invalid scope: `write` required', extensions: { code: 'FORBIDDEN' } }],
+        },
+        { status: 400 },
+      ),
+    ),
+  )
+  const result = await Effect.runPromise(
+    Effect.flatMap(Linear, (linear) =>
+      linear.acknowledge({ issueId: fixture().state.run.issueId }).pipe(Effect.exit),
+    ).pipe(Effect.provide(layer)),
+  )
+  expect(result._tag).toBe('Failure')
+  if (result._tag === 'Failure') expect(Cause.pretty(result.cause)).toContain('Invalid scope: `write` required')
+})
+
+test.each([400, 502])('non-GraphQL HTTP %s responses retain their status and failure kind', async (status) => {
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const client = yield* GraphQLClient
+      return yield* client
+        .execute({ query: 'query { viewer { id } }', variables: {}, schema: Schema.Unknown })
+        .pipe(Effect.flip)
+    }).pipe(
+      Effect.provide(
+        GraphQLClient.layer('https://api.linear.app/graphql', settings.linearKey).pipe(
+          Layer.provide(
+            FetchHttpClient.layer.pipe(
+              Layer.provide(
+                Layer.succeed(
+                  FetchHttpClient.Fetch,
+                  fetchImplementation(async () => new Response('Upstream error', { status })),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+  expect(result.kind).toBe(status >= 500 ? 'transport' : 'linear')
+  expect(result.message).toBe(`GraphQL returned HTTP ${status}`)
+})
