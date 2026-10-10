@@ -275,77 +275,171 @@ test('reply threads belonging to another issue are rejected', async () => {
   expect(result._tag).toBe('Failure')
 })
 
-test.each([false, true])('acknowledgements resolve nested reply=%s to its root and reconcile there', async (nested) => {
-  const f = fixture()
-  const parentId = CommentId.make(crypto.randomUUID())
-  const comment = {
-    id: CommentId.make(crypto.randomUUID()),
-    body: '<!-- ack-event -->\n👀',
-    createdAt: '2026-01-02T00:00:00Z',
-    user: { id: userId },
-  }
-  const targetId = nested ? CommentId.make(crypto.randomUUID()) : parentId
-  let writes = 0
-  const layer = testLayer(
-    fetchImplementation(async (_url, init) => {
-      if (typeof init?.body !== 'string') throw new Error('Expected request body')
-      const request = Schema.decodeUnknownSync(
-        Schema.fromJsonString(
-          Schema.Struct({
-            query: Schema.String,
-            variables: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
-          }),
-        ),
-      )(init.body)
-      if (request.query.includes('query Thread(')) {
-        expect(request.variables.id).toBe(targetId)
+test.each([false, true])(
+  'comment publication resolves nested reply=%s to its root and reconciles there',
+  async (nested) => {
+    const f = fixture()
+    const parentId = CommentId.make(crypto.randomUUID())
+    const comment = {
+      id: CommentId.make(crypto.randomUUID()),
+      body: '<!-- reply-event -->\nReport',
+      createdAt: '2026-01-02T00:00:00Z',
+      user: { id: userId },
+    }
+    const targetId = nested ? CommentId.make(crypto.randomUUID()) : parentId
+    let writes = 0
+    const layer = testLayer(
+      fetchImplementation(async (_url, init) => {
+        if (typeof init?.body !== 'string') throw new Error('Expected request body')
+        const request = Schema.decodeUnknownSync(
+          Schema.fromJsonString(
+            Schema.Struct({
+              query: Schema.String,
+              variables: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
+            }),
+          ),
+        )(init.body)
+        if (request.query.includes('query Thread(')) {
+          expect(request.variables.id).toBe(targetId)
+          return Response.json({
+            data: {
+              comment: {
+                id: targetId,
+                parent: nested ? { id: parentId } : null,
+                issue: { id: f.state.run.issueId, team: { id: settings.teamId } },
+              },
+            },
+          })
+        }
+        if (request.query.includes('mutation Comment(')) {
+          expect(request.variables.parentId).toBe(parentId)
+          expect(request.query).toContain('parentId: $parentId')
+          writes += 1
+          return Response.json({ data: { commentCreate: { success: true, comment } } })
+        }
+        if (request.query.includes('query Replies(')) {
+          expect(request.variables.id).toBe(parentId)
+          return Response.json({
+            data: {
+              comment: {
+                id: parentId,
+                issue: { id: f.state.run.issueId, team: { id: settings.teamId } },
+                children: { nodes: writes > 0 ? [comment] : [], pageInfo: { hasNextPage: false, endCursor: null } },
+              },
+            },
+          })
+        }
+        if (request.query.includes('query Issue(')) return Response.json({ data: { issue: f.state.snapshot.issue } })
+        // A reply need not appear in the issue's top-level comment list.
+        return Response.json({
+          data: { issue: { comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } },
+        })
+      }),
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const linear = yield* Linear
+        const input = {
+          issueId: f.state.run.issueId,
+          body: comment.body,
+          eventMarker: '<!-- reply-event -->',
+          parentId: targetId,
+        }
+        expect(yield* linear.post(input)).toEqual(comment)
+        expect(yield* linear.post(input)).toEqual(comment)
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(writes).toBe(1)
+  },
+)
+
+test.each([false, true])(
+  'acknowledgement reacts to comment=%s and reconciles an ambiguous write',
+  async (onComment) => {
+    const f = fixture()
+    const commentId = onComment ? CommentId.make(crypto.randomUUID()) : undefined
+    let writes = 0
+    const layer = testLayer(
+      fetchImplementation(async (_url, init) => {
+        if (typeof init?.body !== 'string') throw new Error('Expected request body')
+        const request = Schema.decodeUnknownSync(
+          Schema.fromJsonString(
+            Schema.Struct({
+              query: Schema.String,
+              variables: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
+            }),
+          ),
+        )(init.body)
+        expect(request.query).not.toContain('commentCreate')
+        if (request.query.includes('mutation Acknowledge(')) {
+          expect(request.variables.issueId).toBe(onComment ? null : f.state.run.issueId)
+          expect(request.variables.commentId).toBe(commentId ?? null)
+          expect(request.query).toContain('emoji: "👀"')
+          writes += 1
+          // The server applied the mutation, but the client did not receive confirmation.
+          return Response.json({ errors: [{ message: 'Connection interrupted' }] })
+        }
+        expect(request.variables.id).toBe(commentId ?? f.state.run.issueId)
+        const reactions = [
+          { emoji: '👀', user: { id: crypto.randomUUID() } },
+          ...(writes ? [{ emoji: '👀', user: { id: userId } }] : []),
+        ]
+        const issue = { id: f.state.run.issueId, team: { id: settings.teamId } }
         return Response.json({
           data: {
+            viewer: { id: userId },
+            ...(onComment ? { comment: { id: commentId, issue, reactions } } : { issue: { ...issue, reactions } }),
+          },
+        })
+      }),
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const linear = yield* Linear
+        const input = { issueId: f.state.run.issueId, commentId }
+        expect((yield* linear.acknowledge(input).pipe(Effect.exit))._tag).toBe('Failure')
+        yield* linear.acknowledge(input)
+        yield* linear.acknowledge(input)
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(writes).toBe(1)
+  },
+)
+
+test.each(['confirmed', 'rejected', 'unconfirmed', 'wrong-issue', 'wrong-team'])(
+  'reaction confirmation handles %s',
+  async (scenario) => {
+    const f = fixture()
+    const commentId = CommentId.make(crypto.randomUUID())
+    let writes = 0
+    const layer = testLayer(
+      fetchImplementation(async (_url, init) => {
+        if (typeof init?.body !== 'string') throw new Error('Expected request body')
+        if (init.body.includes('mutation Acknowledge(')) {
+          writes += 1
+          return Response.json({ data: { reactionCreate: { success: scenario !== 'rejected' } } })
+        }
+        return Response.json({
+          data: {
+            viewer: { id: userId },
             comment: {
-              id: targetId,
-              parent: nested ? { id: parentId } : null,
-              issue: { id: f.state.run.issueId, team: { id: settings.teamId } },
+              id: commentId,
+              issue: {
+                id: scenario === 'wrong-issue' ? crypto.randomUUID() : f.state.run.issueId,
+                team: { id: scenario === 'wrong-team' ? crypto.randomUUID() : settings.teamId },
+              },
+              reactions: writes && scenario === 'confirmed' ? [{ emoji: '👀', user: { id: userId } }] : [],
             },
           },
         })
-      }
-      if (request.query.includes('mutation Comment(')) {
-        expect(request.variables.parentId).toBe(parentId)
-        expect(request.query).toContain('parentId: $parentId')
-        writes += 1
-        return Response.json({ data: { commentCreate: { success: true, comment } } })
-      }
-      if (request.query.includes('query Replies(')) {
-        expect(request.variables.id).toBe(parentId)
-        return Response.json({
-          data: {
-            comment: {
-              id: parentId,
-              issue: { id: f.state.run.issueId, team: { id: settings.teamId } },
-              children: { nodes: writes > 0 ? [comment] : [], pageInfo: { hasNextPage: false, endCursor: null } },
-            },
-          },
-        })
-      }
-      if (request.query.includes('query Issue(')) return Response.json({ data: { issue: f.state.snapshot.issue } })
-      // The acknowledgement need not appear in the issue's top-level comment list.
-      return Response.json({
-        data: { issue: { comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } },
-      })
-    }),
-  )
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const linear = yield* Linear
-      const input = {
-        issueId: f.state.run.issueId,
-        body: comment.body,
-        eventMarker: '<!-- ack-event -->',
-        parentId: targetId,
-      }
-      expect(yield* linear.post(input)).toEqual(comment)
-      expect(yield* linear.post(input)).toEqual(comment)
-    }).pipe(Effect.provide(layer)),
-  )
-  expect(writes).toBe(1)
-})
+      }),
+    )
+    const result = await Effect.runPromise(
+      Effect.flatMap(Linear, (linear) =>
+        linear.acknowledge({ issueId: f.state.run.issueId, commentId }).pipe(Effect.exit),
+      ).pipe(Effect.provide(layer)),
+    )
+    expect(result._tag).toBe(scenario === 'confirmed' ? 'Success' : 'Failure')
+    expect(writes).toBe(scenario.startsWith('wrong-') ? 0 : 1)
+  },
+)

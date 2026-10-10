@@ -119,13 +119,13 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     } satisfies Snapshot,
   }
   const comments: Comment[] = []
-  const acknowledgements: { comment: Comment; parentId: CommentId | undefined }[] = []
+  const acknowledgements: { issueId: IssueId; commentId?: CommentId | undefined }[] = []
   const read = Effect.fn('Test.Linear.read')(() =>
     Effect.sync(
       (): Snapshot =>
         structuredClone({
           ...state.snapshot,
-          comments: [...comments, ...acknowledgements.map((item) => item.comment)],
+          comments,
         }),
     ),
   )
@@ -133,30 +133,31 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     discover: Effect.succeed([state.snapshot.issue]),
     replies: () => Effect.succeed([]),
     read,
+    acknowledge: Effect.fn('Test.Linear.acknowledge')((input) =>
+      Effect.suspend(() => {
+        if (acknowledgements.some((item) => item.issueId === input.issueId && item.commentId === input.commentId))
+          return Effect.void
+        acknowledgements.push(input)
+        if (state.ambiguousAcknowledgement) {
+          state.ambiguousAcknowledgement = false
+          return Effect.fail(error('transport', 'Timed out after acknowledgement'))
+        }
+        return Effect.void
+      }),
+    ),
     post: Effect.fn('Test.Linear.post')((input) =>
       Effect.suspend(() => {
-        const acknowledgement = input.eventMarker.endsWith('/started -->')
-        const existing = [...comments, ...acknowledgements.map((item) => item.comment)].find((comment) =>
-          comment.body.startsWith(`${input.eventMarker}\n`),
-        )
+        const existing = comments.find((comment) => comment.body.startsWith(`${input.eventMarker}\n`))
         if (existing) return Effect.succeed(existing)
-        if (!acknowledgement) state.posts += 1
+        state.posts += 1
         const comment: Comment = {
           id: CommentId.make(crypto.randomUUID()),
           body: input.body,
           createdAt: new Date().toISOString(),
           user: { id: userId },
         }
-        if (acknowledgement) {
-          const journal = [...state.journals.values()].find((item) => item.body === input.body)
-          if (state.journals.size > 0 && !journal) throw new Error('Acknowledgement intent must be saved first')
-          acknowledgements.push({ comment, parentId: input.parentId })
-          if (state.ambiguousAcknowledgement) {
-            state.ambiguousAcknowledgement = false
-            return Effect.fail(error('transport', 'Timed out after acknowledgement'))
-          }
-        } else comments.push(comment)
-        if (!acknowledgement && state.ambiguous) {
+        comments.push(comment)
+        if (state.ambiguous) {
           state.ambiguous = false
           return Effect.fail(error('transport', 'Timed out after publication'))
         }

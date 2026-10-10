@@ -19,8 +19,8 @@ test('PM → Developer → QA → PM accepts the same refinement and commit', as
   const f = fixture()
   for (let i = 0; i < 4; i++) expect(await execute(f)).toBe(i === 3 ? 'complete' : 'continue')
   expect(f.acknowledgements).toHaveLength(1)
-  expect(f.acknowledgements[0]?.parentId).toBeUndefined()
-  expect(f.acknowledgements[0]?.comment.body).toEndWith('\n👀')
+  expect(f.acknowledgements[0]?.commentId).toBeUndefined()
+  expect(f.acknowledgements[0]?.issueId).toBe(f.state.run.issueId)
   expect(f.state.run.status).toBe('approved')
   expect(f.state.run.commitSha).toBe(sha)
   expect(f.state.run.refinementCommentId).toBe(f.comments[0]?.id ?? null)
@@ -174,22 +174,17 @@ test('acknowledgements reconcile after an ambiguous write before executing the a
   expect(f.state.run.phase).toBe('implementation')
 })
 
-test('human reply acknowledgement is threaded and precedes resumed agent execution', async () => {
+test('human reply acknowledgement reacts directly to the comment and precedes resumed agent execution', async () => {
   const responseCommentId = CommentId.make(crypto.randomUUID())
   const f = fixture({ ...makeRun(), sequence: 1, answer: 'Try now', responseCommentId })
   f.state.agentResult = (run) => {
     expect(f.acknowledgements).toHaveLength(1)
-    expect(f.acknowledgements[0]?.parentId).toBe(responseCommentId)
+    expect(f.acknowledgements[0]?.commentId).toBe(responseCommentId)
     return ready(run)
   }
   expect(await execute(f)).toBe('continue')
   expect(f.state.run.responseCommentId).toBeUndefined()
-  const acknowledgement = f.acknowledgements[0]?.comment
-  const publication = f.comments[0]
-  if (!acknowledgement || !publication) throw new Error('Expected comments')
-  expect(
-    humanAnswer({ publication: { ...publication, createdAt: acknowledgement.createdAt }, replies: [acknowledgement] }),
-  ).toBeUndefined()
+  expect(f.comments).toHaveLength(1)
 })
 
 test('local progress logs identify the ticket and role through assignment and handoff', async () => {

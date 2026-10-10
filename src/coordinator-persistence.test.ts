@@ -145,7 +145,7 @@ test('persisted acknowledgement intent survives a restart after an ambiguous Lin
       const store = yield* Store
       const journal = yield* store.journal(f.state.run)
       expect(journal?.state).toBe('acknowledging')
-      expect(journal?.body).toBe(f.acknowledgements[0]?.comment.body)
+      expect(journal?.assignment.run.issueId).toBe(f.acknowledgements[0]?.issueId)
     }),
   )
   expect(await testRuntime.runPromise(execute(f))).toBe('continue')

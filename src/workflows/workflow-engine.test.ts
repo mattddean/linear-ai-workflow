@@ -103,7 +103,7 @@ test.each([...workerGroups])(
         }
         expect(f.acknowledgements).toHaveLength(group === 'local' ? 2 : 1)
         if (group === 'local')
-          expect(f.acknowledgements[1]?.parentId).toBe(f.comments.find((comment) => comment.body === answer)?.id)
+          expect(f.acknowledgements[1]?.commentId).toBe(f.comments.find((comment) => comment.body === answer)?.id)
         expect(f.state.calls).toBe(5)
         expect(f.state.posts).toBe(5)
         for (;;) {

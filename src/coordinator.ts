@@ -6,16 +6,7 @@ import type { AppError, Assignment, Run, RunId, StepResult } from './domain'
 import { Agent } from './agent'
 import { Settings } from './config'
 import { error, Path } from './domain'
-import {
-  blocked,
-  commentBody,
-  fingerprint,
-  discussionChanged,
-  marker,
-  acknowledgementMarker,
-  roleFor,
-  validateResult,
-} from './handoff'
+import { blocked, commentBody, fingerprint, discussionChanged, marker, roleFor, validateResult } from './handoff'
 import { Linear } from './linear.client'
 import { resolveBudget } from './run-budget'
 import { Store } from './store'
@@ -86,10 +77,7 @@ export class Coordinator extends Context.Service<
                   agentStarted: false,
                   result: null,
                   commentId: null,
-                  body:
-                    current.sequence === 0 || current.responseCommentId !== undefined
-                      ? `${acknowledgementMarker(current)}\n👀`
-                      : null,
+                  body: null,
                   tokens: 0,
                   cachedTokens: 0,
                   elapsedMillis: 0,
@@ -99,16 +87,11 @@ export class Coordinator extends Context.Service<
                 yield* store.save(current)
               }
               if (journal.state === 'acknowledging') {
-                if (journal.body === null)
-                  return yield* error('storage', 'Acknowledgement is missing its persisted body')
                 yield* Effect.logInfo('Publishing 👀 acknowledgement')
-                yield* linear.post({
-                  issueId: current.issueId,
-                  parentId: journal.assignment.run.responseCommentId,
-                  body: journal.body,
-                  eventMarker: acknowledgementMarker(journal.assignment.run),
+                yield* linear.acknowledge({
+                  issueId: journal.assignment.run.issueId,
+                  commentId: journal.assignment.run.responseCommentId,
                 })
-                // Include our confirmed acknowledgement before capturing the agent's discussion baseline.
                 journal = {
                   ...journal,
                   state: 'started',

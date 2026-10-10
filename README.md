@@ -31,7 +31,7 @@ PM refinement --> Developer implementation --> QA verification --> PM acceptance
 4. QA independently inspects and tests that revision. Findings return to the Developer; a passing report goes to the PM.
 5. The PM checks the original request, refinement, implementation, and QA evidence. It accepts the result or routes specific corrections to the appropriate role.
 
-The worker posts 👀 when it picks up a ticket, and posts 👀 in the same thread as a human comment when it begins processing that answer. Acknowledgements are journaled before publication and reconciled on retries; routine role handoffs do not add more eyes comments.
+The worker adds a 👀 reaction to the issue when it picks up a ticket, and reacts directly to a human comment when it begins processing that answer. Acknowledgement intent is journaled before publication and existing reactions from the authenticated user are reconciled on retries; acknowledgements do not post comments.
 
 Each assignment uses a fresh local Codex session with `gpt-6-astra`. Agents communicate through persisted Linear comments; one agent's private conversation is never passed to another. The coordinator publishes an agent's report, confirms that Linear stored it, and fetches that comment before dispatching its recipient.
 

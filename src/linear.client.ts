@@ -6,7 +6,7 @@ import { Settings } from './config'
 import { Comment, Issue, error } from './domain'
 import { GraphQLClient } from './graphql-client'
 
-// Reads team-scoped issues and paginated comments, and reconciles comment publication through Linear’s GraphQL API.
+// Reads team-scoped issues and paginated comments, and reconciles reactions and comment publication through Linear’s GraphQL API.
 
 const Page = Schema.Struct({
   nodes: Schema.Array(Comment),
@@ -31,6 +31,21 @@ const ThreadResponse = Schema.Struct({
 const CreatedResponse = Schema.Struct({
   commentCreate: Schema.Struct({ success: Schema.Boolean, comment: Schema.NullOr(Comment) }),
 })
+const Reactions = Schema.Array(Schema.Struct({ emoji: Schema.String, user: Comment.fields.user }))
+const ReactionIssue = Schema.Struct({ id: Issue.fields.id, team: Issue.fields.team, reactions: Reactions })
+const ReactionIssueResponse = Schema.Struct({
+  viewer: Schema.Struct({ id: Schema.String }),
+  issue: ReactionIssue,
+})
+const ReactionCommentResponse = Schema.Struct({
+  viewer: Schema.Struct({ id: Schema.String }),
+  comment: Schema.Struct({
+    id: Comment.fields.id,
+    issue: Schema.Struct({ id: Issue.fields.id, team: Issue.fields.team }),
+    reactions: Reactions,
+  }),
+})
+const ReactionCreatedResponse = Schema.Struct({ reactionCreate: Schema.Struct({ success: Schema.Boolean }) })
 const DiscoveryResponse = Schema.Struct({
   issues: Schema.Struct({
     nodes: Schema.Array(
@@ -51,6 +66,10 @@ export class Linear extends Context.Service<
     readonly discover: Effect.Effect<readonly Issue[], AppError>
     readonly read: (id: IssueId | typeof IssueKey.Type) => Effect.Effect<Snapshot, AppError>
     readonly replies: (input: { issueId: IssueId; commentId: CommentId }) => Effect.Effect<readonly Comment[], AppError>
+    readonly acknowledge: (input: {
+      issueId: IssueId
+      commentId?: CommentId | undefined
+    }) => Effect.Effect<void, AppError>
     readonly post: (input: {
       issueId: IssueId
       body: string
@@ -156,6 +175,48 @@ export class Linear extends Context.Service<
         }
         return comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
       })
+      const acknowledge = Effect.fn('Linear.acknowledge')(function* (input) {
+        const existing = Effect.fn('Linear.acknowledgementExists')(function* () {
+          if (input.commentId !== undefined) {
+            const { viewer, comment } = yield* readRequest({
+              schema: ReactionCommentResponse,
+              query:
+                'query CommentReactions($id: String!) { viewer { id } comment(id: $id) { id issue { id team { id } } reactions { emoji user { id } } } }',
+              variables: { id: input.commentId },
+            })
+            if (
+              comment.id !== input.commentId ||
+              comment.issue.id !== input.issueId ||
+              comment.issue.team.id !== settings.teamId
+            )
+              return yield* error('linear', 'Reaction target is outside the requested issue or configured team')
+            return comment.reactions.some((reaction) => reaction.emoji === '👀' && reaction.user?.id === viewer.id)
+          }
+          const { viewer, issue } = yield* readRequest({
+            schema: ReactionIssueResponse,
+            query:
+              'query IssueReactions($id: String!) { viewer { id } issue(id: $id) { id team { id } reactions { emoji user { id } } } }',
+            variables: { id: input.issueId },
+          })
+          if (issue.id !== input.issueId || issue.team.id !== settings.teamId)
+            return yield* error('linear', 'Reaction target is outside the requested issue or configured team')
+          return issue.reactions.some((reaction) => reaction.emoji === '👀' && reaction.user?.id === viewer.id)
+        })
+        // Reconcile our own reaction before retrying an ambiguous write; other users' reactions do not acknowledge work.
+        if (yield* existing()) return
+        const created = yield* request({
+          schema: ReactionCreatedResponse,
+          query:
+            'mutation Acknowledge($issueId: String, $commentId: String) { reactionCreate(input: { issueId: $issueId, commentId: $commentId, emoji: "👀" }) { success } }',
+          variables: {
+            issueId: input.commentId === undefined ? input.issueId : null,
+            commentId: input.commentId ?? null,
+          },
+        })
+        if (!created.reactionCreate.success) return yield* error('linear', 'Linear did not confirm reaction creation')
+        if (!(yield* existing()))
+          return yield* error('transport', 'Published reaction is not yet confirmed; retry reconciliation')
+      })
       const threadParent = Effect.fn('Linear.threadParent')(function* (input: {
         issueId: IssueId
         commentId: CommentId
@@ -206,6 +267,7 @@ export class Linear extends Context.Service<
       })
       return Linear.of({
         discover: discover(),
+        acknowledge,
         replies,
         read,
         post,
