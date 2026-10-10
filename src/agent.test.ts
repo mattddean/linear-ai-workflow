@@ -31,11 +31,15 @@ test('usage ignores non-usage events and malformed log lines', () => {
   ).toEqual({ tokens: 23, cachedTokens: 0 })
 })
 
-async function mockCodex(options: { hang: boolean }) {
+async function mockCodex(options: { hang: boolean; progress?: boolean }) {
   const dir = await mkdtemp(join(tmpdir(), 'linear-agent-test-'))
   const f = fixture()
+  if (options.progress) f.state.run = { ...f.state.run, phase: 'implementation' }
   const output = ready(f.state.run)
-  const script = `#!${process.execPath}\nconst args = process.argv.slice(2);\nawait Bun.write(${JSON.stringify(join(dir, 'args.json'))}, JSON.stringify(args));\nawait Bun.write(${JSON.stringify(join(dir, 'input.md'))}, await Bun.stdin.text());\n${options.hang ? 'await new Promise(() => { setInterval(() => {}, 1000) });' : `await Bun.write(args[args.indexOf('--output-last-message') + 1], ${JSON.stringify(JSON.stringify(output))});\nconsole.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:20,output_tokens:3}}));`}\n`
+  const progressScript = options.progress
+    ? `console.log(JSON.stringify({type:'item.completed',item:{id:'item_1',type:'agent_message',text:'Implementation complete; running checks.'}}));\nwhile (!(await Bun.file(${JSON.stringify(join(dir, 'progress-received'))}).exists())) await Bun.sleep(10);\n`
+    : ''
+  const script = `#!${process.execPath}\nconst args = process.argv.slice(2);\nawait Bun.write(${JSON.stringify(join(dir, 'args.json'))}, JSON.stringify(args));\nawait Bun.write(${JSON.stringify(join(dir, 'input.md'))}, await Bun.stdin.text());\n${progressScript}${options.hang ? 'await new Promise(() => { setInterval(() => {}, 1000) });' : `await Bun.write(args[args.indexOf('--output-last-message') + 1], ${JSON.stringify(JSON.stringify(output))});\nconsole.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:20,output_tokens:3}}));`}\n`
   await writeFile(join(dir, 'codex'), script)
   await chmod(join(dir, 'codex'), 0o755)
   const layer = Agent.layer.pipe(Layer.provide(Layer.succeed(Settings, { ...settings, artifactRoot: Path.make(dir) })))
@@ -85,6 +89,8 @@ test('local runner pins Astra, uses structured output, isolates reviewer writes,
   expect(input).toContain('whey/whey.mjs')
   expect(input).toContain(`${mock.assignment.run.repo}/.whey.jsonc`)
   expect(input).toContain(mock.assignment.run.id)
+  expect(input).toContain('To reopen a closed isolate')
+  expect(input).toContain('run start before open')
   expect(
     await stat(join(mock.dir, 'agent.lock')).then(
       () => true,
@@ -171,3 +177,27 @@ for (const override of [undefined, 20]) {
     }
   })
 }
+
+test('Developer public commentary is delivered while its Codex process is still running', async () => {
+  const mock = await mockCodex({ hang: false, progress: true })
+  const prior = process.env.PATH
+  process.env.PATH = `${mock.dir}:${prior ?? ''}`
+  const messages: string[] = []
+  try {
+    const output = await Effect.runPromise(
+      Effect.flatMap(Agent, (agent) =>
+        agent.execute(mock.assignment, (progress) =>
+          Effect.promise(async () => {
+            messages.push(progress.message)
+            await writeFile(join(mock.dir, 'progress-received'), 'yes')
+          }),
+        ),
+      ).pipe(Effect.provide(mock.layer), Effect.timeout('8 seconds')),
+    )
+    expect(messages).toEqual(['Implementation complete; running checks.'])
+    expect(output.result.outcome).toBe('ready')
+  } finally {
+    process.env.PATH = prior
+    await rm(mock.dir, { recursive: true, force: true })
+  }
+}, 10000)

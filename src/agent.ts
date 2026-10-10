@@ -1,10 +1,12 @@
-import { Context, Effect, Layer, JsonSchema, Schema, Option, Schedule } from 'effect'
+import { Context, Effect, Layer, JsonSchema, Schema, Option, Schedule, Fiber } from 'effect'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, readFile, writeFile, rm, open } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
+import type { AgentProgress } from './agent-progress'
 import type { AppError, AgentOutput, Assignment } from './domain'
 
+import { agentProgress } from './agent-progress'
 import { childEnvironment } from './child-environment'
 import { Settings } from './config'
 import { Result, error } from './domain'
@@ -84,7 +86,10 @@ export const recoverAgentLease = Effect.fn('Agent.recoverLease')(function* () {
 export class Agent extends Context.Service<
   Agent,
   {
-    readonly execute: (assignment: Assignment) => Effect.Effect<AgentOutput, AppError>
+    readonly execute: (
+      assignment: Assignment,
+      onProgress?: (progress: AgentProgress) => Effect.Effect<void, AppError>,
+    ) => Effect.Effect<AgentOutput, AppError>
   }
 >()('linear-ai-workflow/agent/Agent') {
   static readonly layer = Layer.effect(
@@ -92,7 +97,7 @@ export class Agent extends Context.Service<
     Effect.gen(function* () {
       const settings = yield* Settings
       return Agent.of({
-        execute: Effect.fn('Agent.execute')(function* (assignment) {
+        execute: Effect.fn('Agent.execute')(function* (assignment, onProgress) {
           const role = roleFor(assignment.run.phase)
           const dir = assignment.artifactDir
           const lock = `${settings.artifactRoot}/agent.lock`
@@ -120,7 +125,7 @@ export class Agent extends Context.Service<
               '--config',
               `${assignment.run.repo}/.whey.jsonc`,
             ]
-            const runtime = `## Whey runtime\n\nThe CLI is installed outside the target repository. Its command argument prefix is ${JSON.stringify(wheyCommand)}. Append inspect, start, or open and isolate ID ${assignment.run.id}. Use inspect to identify the isolate; start initializes its services and guarded migrations; open additionally opens desktop apps. Follow role permissions and target-repository prerequisites.\n`
+            const runtime = `## Whey runtime\n\nThe CLI is installed outside the target repository. Its command argument prefix is ${JSON.stringify(wheyCommand)}. Append inspect, start, or open and isolate ID ${assignment.run.id}. Use inspect to identify the isolate; start initializes its services and guarded migrations; open additionally opens desktop apps. To reopen a closed isolate, inspect it and run open with this same isolate ID; if its services were stopped, run start before open. Reuse the recorded workspace and preserve its changes; closed apps are not a reason to recreate or reset the isolate. Follow role permissions and target-repository prerequisites.\n`
             const input = `${shared}\n\n${prompt}\n\n${runtime}\n## Coordinator assignment\n\n${JSON.stringify(assignment)}\n`
             yield* io(() => writeFile(`${dir}/assignment.json`, JSON.stringify(assignment, null, 2)))
             const output = yield* Effect.acquireRelease(
@@ -188,6 +193,25 @@ export class Agent extends Context.Service<
                 }),
               ),
             ).pipe(Effect.repeat(Schedule.spaced('30 seconds')), Effect.delay('30 seconds'), Effect.forkScoped)
+            let progressLines = 0
+            const publishProgress = Effect.fn('Agent.publishProgress')(function* () {
+              if (role !== 'developer' || onProgress === undefined) return
+              const lines = (yield* io(() => readFile(logPath, 'utf8'))).split('\n')
+              // Only consume complete lines; Codex can be in the middle of writing the next event.
+              while (progressLines < lines.length - 1) {
+                const progress = agentProgress(lines[progressLines] ?? '')
+                if (progress) yield* onProgress(progress)
+                progressLines += 1
+              }
+            })
+            const progressFiber =
+              role === 'developer' && onProgress !== undefined
+                ? yield* publishProgress().pipe(
+                    Effect.catch((failure) => Effect.logWarning(`Progress update pending: ${failure.message}`)),
+                    Effect.repeat(Schedule.spaced('1 second')),
+                    Effect.forkScoped,
+                  )
+                : undefined
             let inputFailed = false
             child.stdin?.on('error', () => {
               inputFailed = true
@@ -210,6 +234,8 @@ export class Agent extends Context.Service<
                   ),
               }),
             )
+            if (progressFiber !== undefined) yield* Fiber.interrupt(progressFiber)
+            yield* publishProgress()
             yield* Effect.logInfo('Codex process exited').pipe(
               Effect.annotateLogs({
                 pid: child.pid,

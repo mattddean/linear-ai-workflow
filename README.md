@@ -33,6 +33,8 @@ PM refinement --> Developer implementation --> QA verification --> PM acceptance
 
 The worker adds a 👀 reaction to the issue when it picks up a ticket, and reacts directly to a human comment when it begins processing that answer. Acknowledgement intent is journaled before publication and existing reactions from the authenticated user are reconciled on retries; acknowledgements do not post comments. The Linear credential needs Read and Write permissions; Create comments permission alone does not allow reactions.
 
+Developer progress is posted as short Linear comments while the assignment runs: isolate preparation, implementation milestones, checks, commits, and blockers. The initial isolate comment gives its absolute directory and the exact Whey command to open or reopen it; headless preparation does not imply that desktop apps or development servers are running. Only public Developer commentary is forwarded, never raw tool output or reasoning. Progress intent and confirmed comment IDs live in the assignment journal, so uncertain writes reconcile on retry and these recorded comments do not invalidate the refinement or dispatch another role.
+
 Each assignment uses a fresh local Codex session with `gpt-6-astra`. Agents communicate through persisted Linear comments; one agent's private conversation is never passed to another. The coordinator publishes an agent's report, confirms that Linear stored it, and fetches that comment before dispatching its recipient.
 
 Approval means the local implementation satisfies the ticket. Pushing, merging, deploying, and changing Linear status are separate, explicitly authorized actions.

@@ -1,5 +1,6 @@
 import { Effect, Layer, Redacted } from 'effect'
 
+import type { AgentProgress } from '../agent-progress'
 import type { Assignment, Comment, Journal, Run, Result, Snapshot } from '../domain'
 
 import { Agent } from '../agent'
@@ -105,6 +106,8 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     pause: false,
     ambiguous: false,
     ambiguousAcknowledgement: false,
+    ambiguousProgress: false,
+    progressMessages: new Array<AgentProgress>(),
     agentResult: (run: Run): Result => ready(run),
     snapshot: {
       issue: {
@@ -119,13 +122,14 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     } satisfies Snapshot,
   }
   const comments: Comment[] = []
+  const progressComments: Comment[] = []
   const acknowledgements: { issueId: IssueId; commentId?: CommentId | undefined }[] = []
   const read = Effect.fn('Test.Linear.read')(() =>
     Effect.sync(
       (): Snapshot =>
         structuredClone({
           ...state.snapshot,
-          comments,
+          comments: [...comments, ...progressComments],
         }),
     ),
   )
@@ -147,17 +151,33 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     ),
     post: Effect.fn('Test.Linear.post')((input) =>
       Effect.suspend(() => {
-        const existing = comments.find((comment) => comment.body.startsWith(`${input.eventMarker}\n`))
+        const existing = [...comments, ...progressComments].find((comment) =>
+          comment.body.startsWith(`${input.eventMarker}\n`),
+        )
         if (existing) return Effect.succeed(existing)
-        state.posts += 1
+        const progress = input.eventMarker.includes('/progress/')
+        if (!progress) state.posts += 1
         const comment: Comment = {
           id: CommentId.make(crypto.randomUUID()),
           body: input.body,
           createdAt: new Date().toISOString(),
           user: { id: userId },
         }
-        comments.push(comment)
-        if (state.ambiguous) {
+        if (progress) {
+          if (
+            state.journals.size > 0 &&
+            ![...state.journals.values()].some((journal) =>
+              journal.progressComments?.some((item) => item.body === input.body),
+            )
+          )
+            throw new Error('Progress intent must be saved before publication')
+          progressComments.push(comment)
+          if (state.ambiguousProgress) {
+            state.ambiguousProgress = false
+            return Effect.fail(error('transport', 'Timed out after progress publication'))
+          }
+        } else comments.push(comment)
+        if (!progress && state.ambiguous) {
           state.ambiguous = false
           return Effect.fail(error('transport', 'Timed out after publication'))
         }
@@ -195,12 +215,13 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     acknowledge: () => Effect.void,
   })
   const agent = Agent.of({
-    execute: Effect.fn('Test.Agent.execute')((assignment: Assignment) =>
-      Effect.sync(() => {
-        state.calls += 1
-        return { result: state.agentResult(assignment.run), tokens: 100, cachedTokens: state.cachedTokensPerAssignment }
-      }),
-    ),
+    execute: Effect.fn('Test.Agent.execute')(function* (assignment: Assignment, onProgress) {
+      state.calls += 1
+      for (const progress of state.progressMessages) {
+        if (onProgress) yield* onProgress(progress)
+      }
+      return { result: state.agentResult(assignment.run), tokens: 100, cachedTokens: state.cachedTokensPerAssignment }
+    }),
   })
   const workspace = Workspace.of({
     inspectBase: () => Effect.succeed({ repo: initial.repo, baseSha: sha }),
@@ -214,7 +235,7 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     Layer.succeed(Linear, linear),
   )
   const layer = Coordinator.layer.pipe(Layer.provide(dependencies), Layer.provide(Layer.succeed(Store, store)))
-  return { state, comments, acknowledgements, store, linear, agent, workspace, dependencies, layer }
+  return { state, comments, progressComments, acknowledgements, store, linear, agent, workspace, dependencies, layer }
 }
 
 // Capture this test's fakes while leaving the real Store supplied by the calling runtime or scope.

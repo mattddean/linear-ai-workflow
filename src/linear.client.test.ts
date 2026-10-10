@@ -372,17 +372,18 @@ test.each([false, true])(
         )(init.body)
         expect(request.query).not.toContain('commentCreate')
         if (request.query.includes('mutation Acknowledge(')) {
-          expect(request.variables.issueId).toBe(onComment ? null : f.state.run.issueId)
-          expect(request.variables.commentId).toBe(commentId ?? null)
-          expect(request.query).toContain('emoji: "👀"')
+          expect(request.variables).toEqual({ id: commentId ?? f.state.run.issueId })
+          expect(request.query).toContain(onComment ? 'commentId: $id' : 'issueId: $id')
+          expect(request.query).not.toContain(onComment ? 'issueId:' : 'commentId:')
+          expect(request.query).toContain('emoji: "eyes"')
           writes += 1
           // The server applied the mutation, but the client did not receive confirmation.
           return Response.json({ errors: [{ message: 'Connection interrupted' }] })
         }
         expect(request.variables.id).toBe(commentId ?? f.state.run.issueId)
         const reactions = [
-          { emoji: '👀', user: { id: crypto.randomUUID() } },
-          ...(writes ? [{ emoji: '👀', user: { id: userId } }] : []),
+          { emoji: 'eyes', user: { id: crypto.randomUUID() } },
+          ...(writes ? [{ emoji: 'eyes', user: { id: userId } }] : []),
         ]
         const issue = { id: f.state.run.issueId, team: { id: settings.teamId } }
         return Response.json({
@@ -428,7 +429,7 @@ test.each(['confirmed', 'rejected', 'unconfirmed', 'wrong-issue', 'wrong-team'])
                 id: scenario === 'wrong-issue' ? crypto.randomUUID() : f.state.run.issueId,
                 team: { id: scenario === 'wrong-team' ? crypto.randomUUID() : settings.teamId },
               },
-              reactions: writes && scenario === 'confirmed' ? [{ emoji: '👀', user: { id: userId } }] : [],
+              reactions: writes && scenario === 'confirmed' ? [{ emoji: 'eyes', user: { id: userId } }] : [],
             },
           },
         })
@@ -490,4 +491,36 @@ test.each([400, 502])('non-GraphQL HTTP %s responses retain their status and fai
   )
   expect(result.kind).toBe(status >= 500 ? 'transport' : 'linear')
   expect(result.message).toBe(`GraphQL returned HTTP ${status}`)
+})
+
+test.each([false, true])('existing canonical eyes reaction on comment=%s skips creation', async (onComment) => {
+  const f = fixture()
+  const commentId = onComment ? CommentId.make(crypto.randomUUID()) : undefined
+  let reads = 0
+  let writes = 0
+  const layer = testLayer(
+    fetchImplementation(async (_url, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected request body')
+      if (init.body.includes('mutation')) {
+        writes += 1
+        return Response.json({ errors: [{ message: 'Entity Reaction already exists.' }] })
+      }
+      reads += 1
+      const issue = { id: f.state.run.issueId, team: { id: settings.teamId } }
+      const reactions = [{ emoji: 'eyes', user: { id: userId } }]
+      return Response.json({
+        data: {
+          viewer: { id: userId },
+          ...(onComment ? { comment: { id: commentId, issue, reactions } } : { issue: { ...issue, reactions } }),
+        },
+      })
+    }),
+  )
+  await Effect.runPromise(
+    Effect.flatMap(Linear, (linear) => linear.acknowledge({ issueId: f.state.run.issueId, commentId })).pipe(
+      Effect.provide(layer),
+    ),
+  )
+  expect(reads).toBe(1)
+  expect(writes).toBe(0)
 })

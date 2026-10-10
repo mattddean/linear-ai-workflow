@@ -252,3 +252,49 @@ test('an explicit token override is enforced while time follows configuration', 
   expect(f.comments.at(-1)?.body).toContain('tokens 10000/10000')
   expect(f.comments.at(-1)?.body).not.toContain('active minutes')
 })
+
+test('Developer progress is published during execution without invalidating the refinement or creating a handoff', async () => {
+  const f = fixture()
+  await execute(f)
+  const refinement = f.state.run.refinementCommentId
+  f.state.progressMessages = [{ key: 'item_1', message: 'Implemented the upload flow; checking retries.' }]
+  f.state.agentResult = (run) => {
+    expect(f.progressComments).toHaveLength(2)
+    expect(f.progressComments[0]?.body).toContain(run.workspace)
+    expect(f.progressComments[0]?.body).toContain(`'open' '${run.id}'`)
+    expect(f.progressComments[1]?.body).toContain('Implemented the upload flow')
+    expect(f.state.run.predecessorId).toBe(refinement)
+    return ready(run)
+  }
+  expect(await execute(f)).toBe('continue')
+  expect(f.state.run.phase).toBe('verification')
+  expect(f.state.run.refinementCommentId).toBe(refinement)
+  expect(f.state.posts).toBe(2)
+  expect(f.state.journals.get(1)?.progressComments?.every((item) => item.commentId !== null)).toBe(true)
+})
+
+test('ambiguous progress is reconciled from its saved intent before the final handoff', async () => {
+  const f = fixture()
+  await execute(f)
+  f.state.ambiguousProgress = true
+  expect(await execute(f)).toBe('continue')
+  expect(f.progressComments).toHaveLength(1)
+  expect(f.state.calls).toBe(2)
+  expect(f.state.run.phase).toBe('verification')
+})
+
+test('unrecorded progress-looking comments still return work to PM', async () => {
+  const f = fixture()
+  await execute(f)
+  f.state.agentResult = (run) => {
+    f.comments.push({
+      id: CommentId.make(crypto.randomUUID()),
+      body: `<!-- linear-ai-workflow:${run.id}/${run.sequence}/progress/99 -->\nNew requirement`,
+      createdAt: new Date().toISOString(),
+      user: { id: userId },
+    })
+    return ready(run)
+  }
+  expect(await execute(f)).toBe('continue')
+  expect(f.state.run.phase).toBe('refinement')
+})

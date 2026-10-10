@@ -80,11 +80,14 @@ export function discussionChanged(input: {
   before: Snapshot
   after: Snapshot
   ignoreCommentId: CommentId | null
+  ignoreCommentIds?: readonly CommentId[]
 }): boolean {
-  const comments = input.after.comments.filter((comment) => comment.id !== input.ignoreCommentId)
+  const ignored = new Set([input.ignoreCommentId, ...(input.ignoreCommentIds ?? [])])
+  const beforeComments = input.before.comments.filter((comment) => !ignored.has(comment.id))
+  const comments = input.after.comments.filter((comment) => !ignored.has(comment.id))
   return (
     fingerprint(input.before) !== fingerprint(input.after) ||
-    input.before.comments.length !== comments.length ||
-    comments.some((comment) => !input.before.comments.some((old) => old.id === comment.id && old.body === comment.body))
+    beforeComments.length !== comments.length ||
+    comments.some((comment) => !beforeComments.some((old) => old.id === comment.id && old.body === comment.body))
   )
 }

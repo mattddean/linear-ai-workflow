@@ -1,9 +1,11 @@
 import { Context, Effect, Layer, Semaphore } from 'effect'
 import { readFile } from 'node:fs/promises'
 
+import type { AgentProgress } from './agent-progress'
 import type { AppError, Assignment, Run, RunId, StepResult } from './domain'
 
 import { Agent } from './agent'
+import { isolateProgress } from './agent-progress'
 import { Settings } from './config'
 import { error, Path } from './domain'
 import { blocked, commentBody, fingerprint, discussionChanged, marker, roleFor, validateResult } from './handoff'
@@ -101,6 +103,33 @@ export class Coordinator extends Context.Service<
                 yield* store.saveJournal(journal)
                 fresh = true
               }
+              const publishProgress = Effect.fn('Coordinator.publishProgress')(function* (progress: AgentProgress) {
+                if (journal === null) return yield* error('storage', 'Progress has no assignment journal')
+                let entry = journal.progressComments?.find((item) => item.key === progress.key)
+                if (entry !== undefined && entry.commentId !== null) return
+                if (entry === undefined) {
+                  const eventMarker = `<!-- linear-ai-workflow:${current.id}/${input.sequence}/progress/${journal.progressComments?.length ?? 0} -->`
+                  entry = { key: progress.key, body: `${eventMarker}\nDeveloper: ${progress.message}`, commentId: null }
+                  journal = { ...journal, progressComments: [...(journal.progressComments ?? []), entry] }
+                }
+                yield* store.saveJournal(journal)
+                const posted = yield* linear.post({
+                  issueId: current.issueId,
+                  body: entry.body,
+                  eventMarker: entry.body.split('\n')[0] ?? '',
+                })
+                journal = {
+                  ...journal,
+                  progressComments: journal.progressComments?.map((item) =>
+                    item.key === progress.key ? { ...item, commentId: posted.id } : item,
+                  ),
+                }
+                yield* store.saveJournal(journal)
+              })
+              const reportProgress = (progress: AgentProgress) =>
+                publishProgress(progress).pipe(
+                  Effect.catch((failure) => Effect.logWarning(`Progress publication pending: ${failure.message}`)),
+                )
               if (fresh) {
                 const assignment = journal.assignment
                 const snapshot = assignment.snapshot
@@ -108,7 +137,6 @@ export class Coordinator extends Context.Service<
                 yield* Effect.logInfo('Assignment started').pipe(
                   Effect.annotateLogs({ artifacts: assignment.artifactDir }),
                 )
-                const initialJournal = journal
                 let didExecute = false
                 const output = yield* Effect.gen(function* () {
                   if (yield* store.paused(run.id))
@@ -144,6 +172,7 @@ export class Coordinator extends Context.Service<
                     Effect.annotateLogs({ workspace: run.workspace }),
                   )
                   yield* workspace.prepare(run)
+                  if (run.phase === 'implementation') yield* reportProgress(isolateProgress(run))
                   yield* Effect.logInfo('Whey isolate ready; checking source revision')
                   const before = yield* workspace.inspect(run)
                   if (run.commitSha !== null && before !== run.commitSha)
@@ -174,9 +203,13 @@ export class Coordinator extends Context.Service<
                     }
                   }
                   didExecute = true
-                  yield* store.saveJournal({ ...initialJournal, agentStarted: true })
+                  if (journal === null) return yield* error('storage', 'Assignment journal is missing')
+                  journal = { ...journal, agentStarted: true }
+                  yield* store.saveJournal(journal)
                   yield* Effect.logInfo('Starting Codex')
-                  const output = yield* agent.execute(assignment).pipe(Effect.raceFirst(pauseWatcher(run.id)))
+                  const output = yield* agent
+                    .execute(assignment, run.phase === 'implementation' ? reportProgress : undefined)
+                    .pipe(Effect.raceFirst(pauseWatcher(run.id)))
                   yield* Effect.logInfo('Codex finished').pipe(
                     Effect.annotateLogs({
                       outcome: output.result.outcome,
@@ -232,6 +265,12 @@ export class Coordinator extends Context.Service<
               }
               if (journal.result === null || journal.body === null)
                 return yield* error('storage', 'Prepared assignment is missing its report')
+              for (const progress of journal.progressComments ?? []) {
+                if (progress.commentId === null) yield* publishProgress({ key: progress.key, message: '' })
+              }
+              const progressCommentIds = (journal.progressComments ?? []).flatMap((progress) =>
+                progress.commentId === null ? [] : [progress.commentId],
+              )
               const beforePublication = yield* linear.read(current.issueId)
               const existing = beforePublication.comments.find((comment) =>
                 comment.body.startsWith(`${marker(current)}\n`),
@@ -243,6 +282,7 @@ export class Coordinator extends Context.Service<
                   before: journal.assignment.snapshot,
                   after: beforePublication,
                   ignoreCommentId: null,
+                  ignoreCommentIds: progressCommentIds,
                 })
               ) {
                 const replacement = {
@@ -282,6 +322,7 @@ export class Coordinator extends Context.Service<
                 before: journal.assignment.snapshot,
                 after: latest,
                 ignoreCommentId: posted.id,
+                ignoreCommentIds: progressCommentIds,
               })
               const paused = yield* store.paused(current.id)
               const waiting = result.outcome === 'blocked' || paused

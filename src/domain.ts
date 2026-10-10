@@ -107,7 +107,13 @@ export const AgentOutput = Schema.Struct({ result: Result, tokens: Schema.Int, c
 export type AgentOutput = typeof AgentOutput.Type
 export const StepResult = Schema.Literals(['continue', 'wait', 'complete'])
 export type StepResult = typeof StepResult.Type
+export const ProgressComment = Schema.Struct({
+  key: Schema.String,
+  body: Schema.String,
+  commentId: Schema.NullOr(CommentId),
+})
 export const Journal = Schema.Struct({
+  progressComments: Schema.optional(Schema.Array(ProgressComment)),
   assignment: Assignment,
   state: Schema.Literals(['acknowledging', 'started', 'prepared', 'done']),
   agentStarted: Schema.Boolean,

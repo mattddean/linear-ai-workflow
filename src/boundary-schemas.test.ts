@@ -125,3 +125,13 @@ test('identifier schemas retain dashed hexadecimal validation without adding UUI
     }),
   ).toThrow()
 })
+
+test('progress comment outbox round-trips snake_case keys without requiring it on older journals', () => {
+  const payload = {
+    ...legacyJournal,
+    progress_comments: [{ key: 'item_1', body: 'Developer: Checks passed.', comment_id: legacyId }],
+  }
+  const decoded = Schema.decodeUnknownSync(JournalData)(payload)
+  strictEqual(decoded.progressComments?.[0]?.commentId, legacyId)
+  deepStrictEqual(Schema.encodeSync(JournalData)(decoded), payload)
+})

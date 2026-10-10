@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-import { Comment, Issue, Result, Run, Assignment, Journal, BudgetOverrides } from './domain'
+import { Comment, Issue, Result, Run, Assignment, Journal, BudgetOverrides, ProgressComment } from './domain'
 
 // Converts snake_case persisted JSON payloads to the typed camelCase domain model and back.
 
@@ -64,7 +64,10 @@ export const AssignmentData = Schema.Struct({
   }),
 )
 
+const ProgressCommentData = ProgressComment.pipe(Schema.encodeKeys({ commentId: 'comment_id' }))
+
 export const JournalData = Schema.Struct({
+  progressComments: Schema.optional(Schema.Array(ProgressCommentData)),
   assignment: AssignmentData,
   state: Journal.fields.state,
   agentStarted: Journal.fields.agentStarted,
@@ -82,5 +85,6 @@ export const JournalData = Schema.Struct({
     commentId: 'comment_id',
     elapsedMillis: 'elapsed_millis',
     stepResult: 'step_result',
+    progressComments: 'progress_comments',
   }),
 )

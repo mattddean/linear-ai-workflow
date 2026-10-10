@@ -190,7 +190,7 @@ export class Linear extends Context.Service<
               comment.issue.team.id !== settings.teamId
             )
               return yield* error('linear', 'Reaction target is outside the requested issue or configured team')
-            return comment.reactions.some((reaction) => reaction.emoji === '👀' && reaction.user?.id === viewer.id)
+            return comment.reactions.some((reaction) => reaction.emoji === 'eyes' && reaction.user?.id === viewer.id)
           }
           const { viewer, issue } = yield* readRequest({
             schema: ReactionIssueResponse,
@@ -200,18 +200,18 @@ export class Linear extends Context.Service<
           })
           if (issue.id !== input.issueId || issue.team.id !== settings.teamId)
             return yield* error('linear', 'Reaction target is outside the requested issue or configured team')
-          return issue.reactions.some((reaction) => reaction.emoji === '👀' && reaction.user?.id === viewer.id)
+          return issue.reactions.some((reaction) => reaction.emoji === 'eyes' && reaction.user?.id === viewer.id)
         })
         // Reconcile our own reaction before retrying an ambiguous write; other users' reactions do not acknowledge work.
         if (yield* existing()) return
         const created = yield* request({
           schema: ReactionCreatedResponse,
+          // Linear counts an explicitly null target as defined; include only the selected association.
           query:
-            'mutation Acknowledge($issueId: String, $commentId: String) { reactionCreate(input: { issueId: $issueId, commentId: $commentId, emoji: "👀" }) { success } }',
-          variables: {
-            issueId: input.commentId === undefined ? input.issueId : null,
-            commentId: input.commentId ?? null,
-          },
+            input.commentId === undefined
+              ? 'mutation Acknowledge($id: String!) { reactionCreate(input: { issueId: $id, emoji: "eyes" }) { success } }'
+              : 'mutation Acknowledge($id: String!) { reactionCreate(input: { commentId: $id, emoji: "eyes" }) { success } }',
+          variables: { id: input.commentId ?? input.issueId },
         })
         if (!created.reactionCreate.success) return yield* error('linear', 'Linear did not confirm reaction creation')
         if (!(yield* existing()))

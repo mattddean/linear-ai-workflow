@@ -1,12 +1,14 @@
 import { expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
-import { Effect } from 'effect'
+import { Effect, Layer } from 'effect'
 
 import { Coordinator } from './coordinator'
 import { Db } from './db/live'
 import { workflow_runs, workflow_assignments } from './db/schema'
+import { CommentId, error } from './domain'
+import { Linear } from './linear.client'
 import { Store } from './store'
-import { coordinatorLayer, fixture } from './test/fixtures'
+import { coordinatorLayer, fixture, userId } from './test/fixtures'
 import { testRuntime } from './test/runtime/root'
 
 // Verifies coordinator replay and publication recovery against persisted run and journal rows, with external services faked.
@@ -155,6 +157,60 @@ test('persisted acknowledgement intent survives a restart after an ambiguous Lin
     Effect.gen(function* () {
       const store = yield* Store
       yield* store.save({ ...(yield* store.get(f.state.run.id)), status: 'approved' })
+    }),
+  )
+})
+
+test('prepared Developer result and pending progress survive rebuilding the coordinator', async () => {
+  const f = fixture()
+  const refinement = CommentId.make(crypto.randomUUID())
+  f.state.run = { ...f.state.run, phase: 'implementation', refinementCommentId: refinement, predecessorId: refinement }
+  f.comments.push({ id: refinement, body: 'PM refinement', createdAt: new Date().toISOString(), user: { id: userId } })
+  let ambiguous = true
+  const linear = Linear.of({
+    ...f.linear,
+    post: (input) =>
+      f.linear
+        .post(input)
+        .pipe(
+          Effect.flatMap((comment) =>
+            ambiguous && input.eventMarker.includes('/progress/')
+              ? Effect.fail(error('transport', 'Progress acknowledgement was lost'))
+              : Effect.succeed(comment),
+          ),
+        ),
+  })
+  const layer = Coordinator.layer.pipe(Layer.provide(Layer.merge(f.dependencies, Layer.succeed(Linear, linear))))
+  const step = () =>
+    Effect.flatMap(Coordinator, (coordinator) => coordinator.step({ id: f.state.run.id, sequence: 0 })).pipe(
+      Effect.provide(layer),
+    )
+  await testRuntime.runPromise(Effect.flatMap(Store, (store) => store.create(f.state.run)))
+  expect((await testRuntime.runPromise(step().pipe(Effect.exit)))._tag).toBe('Failure')
+  expect(f.state.calls).toBe(1)
+  await testRuntime.runPromise(
+    Effect.gen(function* () {
+      const db = yield* Db
+      const [row] = yield* db.select().from(workflow_assignments).where(eq(workflow_assignments.run_id, f.state.run.id))
+      expect(row?.data.state).toBe('prepared')
+      expect(row?.data.result?.outcome).toBe('ready')
+      expect(row?.data.progress_comments?.[0]?.comment_id).toBeNull()
+      expect(row?.data.progress_comments?.[0]?.body).toContain(f.state.run.workspace)
+    }),
+  )
+  ambiguous = false
+  expect(await testRuntime.runPromise(step())).toBe('continue')
+  expect(f.state.calls).toBe(1)
+  expect(f.progressComments).toHaveLength(1)
+  await testRuntime.runPromise(
+    Effect.gen(function* () {
+      const store = yield* Store
+      const journal = yield* store.journal(f.state.run)
+      expect(journal?.state).toBe('done')
+      expect(journal?.progressComments?.[0]?.commentId).toBe(f.progressComments[0]?.id)
+      const run = yield* store.get(f.state.run.id)
+      expect(run.phase).toBe('verification')
+      yield* store.save({ ...run, status: 'approved' })
     }),
   )
 })
