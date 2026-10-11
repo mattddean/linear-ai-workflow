@@ -8,6 +8,8 @@ export const IssueId = Schema.String.check(Schema.isGUID()).pipe(Schema.brand('I
 export type IssueId = typeof IssueId.Type
 export const CommentId = Schema.String.check(Schema.isGUID()).pipe(Schema.brand('CommentId'))
 export type CommentId = typeof CommentId.Type
+export const CodexSessionId = Schema.String.check(Schema.isGUID()).pipe(Schema.brand('CodexSessionId'))
+export type CodexSessionId = typeof CodexSessionId.Type
 export const TeamId = Schema.String.check(Schema.isGUID()).pipe(Schema.brand('TeamId'))
 export const UserId = Schema.String.check(Schema.isGUID()).pipe(Schema.brand('UserId'))
 export const IssueKey = Schema.String.check(Schema.isPattern(/^[A-Z][A-Z0-9]*-\d+$/)).pipe(Schema.brand('IssueKey'))
@@ -72,6 +74,7 @@ export const BudgetOverrides = Schema.Struct({
   maxMinutes: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }))),
 })
 export type BudgetOverrides = typeof BudgetOverrides.Type
+export const CodexSessionUsage = Schema.Struct({ tokens: Schema.Int, cachedTokens: Schema.Int })
 export const Run = Schema.Struct({
   id: RunId,
   workerGroup: WorkerGroup,
@@ -85,6 +88,10 @@ export const Run = Schema.Struct({
   commitSha: Schema.NullOr(CommitSha),
   refinementCommentId: Schema.NullOr(CommentId),
   predecessorId: Schema.NullOr(CommentId),
+  threadCommentId: Schema.optional(CommentId),
+  codexSessionId: Schema.optional(CodexSessionId),
+  codexSessionUnresolved: Schema.optional(Schema.Boolean),
+  codexSessionUsage: Schema.optional(CodexSessionUsage),
   phase: Phase,
   status: Schema.Literals(['queued', 'running', 'blocked', 'paused', 'approved', 'canceling', 'canceled']),
   sequence: Schema.Int,
@@ -104,16 +111,26 @@ export const Run = Schema.Struct({
 export type Run = typeof Run.Type
 export const Assignment = Schema.Struct({ run: Run, snapshot: Snapshot, artifactDir: Path })
 export type Assignment = typeof Assignment.Type
-export const AgentOutput = Schema.Struct({ result: Result, tokens: Schema.Int, cachedTokens: Schema.Int })
+export const AgentOutput = Schema.Struct({
+  result: Result,
+  tokens: Schema.Int,
+  cachedTokens: Schema.Int,
+  sessionUsage: Schema.optional(CodexSessionUsage),
+})
 export type AgentOutput = typeof AgentOutput.Type
 export const StepResult = Schema.Literals(['continue', 'wait', 'complete'])
 export type StepResult = typeof StepResult.Type
 export const ProgressComment = Schema.Struct({
+  publicationId: Schema.optional(CommentId),
   key: Schema.String,
   body: Schema.String,
   commentId: Schema.NullOr(CommentId),
 })
 export const Journal = Schema.Struct({
+  sessionUsage: Schema.optional(CodexSessionUsage),
+  publicationId: Schema.optional(CommentId),
+  threadBody: Schema.optional(Schema.String),
+  threadPublished: Schema.optional(Schema.Boolean),
   progressComments: Schema.optional(Schema.Array(ProgressComment)),
   assignment: Assignment,
   state: Schema.Literals(['acknowledging', 'started', 'prepared', 'done']),

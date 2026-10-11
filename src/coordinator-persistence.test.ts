@@ -6,6 +6,7 @@ import { Coordinator } from './coordinator'
 import { Db } from './db/live'
 import { workflow_runs, workflow_assignments } from './db/schema'
 import { CommentId, error } from './domain'
+import { blocked } from './handoff'
 import { Linear } from './linear.client'
 import { Store } from './store'
 import { coordinatorLayer, fixture, userId } from './test/fixtures'
@@ -174,7 +175,7 @@ test('prepared Developer result and pending progress survive rebuilding the coor
         .post(input)
         .pipe(
           Effect.flatMap((comment) =>
-            ambiguous && input.eventMarker.includes('/progress/')
+            ambiguous && input.body.startsWith('Developer:')
               ? Effect.fail(error('transport', 'Progress acknowledgement was lost'))
               : Effect.succeed(comment),
           ),
@@ -213,4 +214,30 @@ test('prepared Developer result and pending progress survive rebuilding the coor
       yield* store.save({ ...run, status: 'approved' })
     }),
   )
+})
+
+test('prepared blocked reports preserve the session usage baseline and publication IDs across replay', async () => {
+  const f = fixture()
+  f.state.agentResult = (run) => blocked(run, 'Connect device')
+  f.state.ambiguous = true
+  await testRuntime.runPromise(Effect.flatMap(Store, (store) => store.create(f.state.run)))
+  expect((await testRuntime.runPromise(execute(f).pipe(Effect.exit)))._tag).toBe('Failure')
+  expect(await testRuntime.runPromise(execute(f))).toBe('wait')
+  await testRuntime.runPromise(
+    Effect.gen(function* () {
+      const store = yield* Store
+      const run = yield* store.get(f.state.run.id)
+      expect(run.codexSessionId).toBeDefined()
+      expect(run.codexSessionUsage).toEqual({ tokens: 100, cachedTokens: 0 })
+      const publications = yield* store.publicationIds(run.id)
+      expect(publications).toContain(f.roots[0]?.id)
+      expect(publications).toContain(f.comments[0]?.id)
+      const db = yield* Db
+      const [row] = yield* db.select().from(workflow_assignments).where(eq(workflow_assignments.run_id, run.id))
+      expect(row?.data.session_usage).toEqual({ tokens: 100, cached_tokens: 0 })
+      expect(row?.data.publication_id).toBe(f.comments[0]?.id)
+      yield* store.save({ ...run, status: 'approved' })
+    }),
+  )
+  expect(f.state.calls).toBe(1)
 })

@@ -86,6 +86,11 @@ export const resumeCommand = Command.make(
         ...run,
         commitSha: input.acceptHead ? head : run.commitSha,
         phase: input.acceptHead && run.refinementCommentId !== null ? 'implementation' : run.phase,
+        threadCommentId: input.acceptHead && run.phase !== 'implementation' ? undefined : run.threadCommentId,
+        codexSessionId: input.acceptHead && run.phase !== 'implementation' ? undefined : run.codexSessionId,
+        codexSessionUsage: input.acceptHead && run.phase !== 'implementation' ? undefined : run.codexSessionUsage,
+        codexSessionUnresolved:
+          input.acceptHead && run.phase !== 'implementation' ? undefined : run.codexSessionUnresolved,
         ...(Object.keys(budgetOverrides).length > 0 ? { budgetOverrides } : {}),
       })
       yield* store.control({ id: run.id, command: 'resume', answer: input.answer || null })

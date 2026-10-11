@@ -1,6 +1,16 @@
 import { Schema } from 'effect'
 
-import { Comment, Issue, Result, Run, Assignment, Journal, BudgetOverrides, ProgressComment } from './domain'
+import {
+  Comment,
+  Issue,
+  Result,
+  Run,
+  Assignment,
+  Journal,
+  BudgetOverrides,
+  ProgressComment,
+  CodexSessionUsage,
+} from './domain'
 
 // Converts snake_case persisted JSON payloads to the typed camelCase domain model and back.
 
@@ -30,11 +40,17 @@ export const ResultData = Result.pipe(
   }),
 )
 
+const CodexSessionUsageData = CodexSessionUsage.pipe(Schema.encodeKeys({ cachedTokens: 'cached_tokens' }))
+
 const BudgetOverridesData = BudgetOverrides.pipe(
   Schema.encodeKeys({ maxAttempts: 'max_attempts', maxTokens: 'max_tokens', maxMinutes: 'max_minutes' }),
 )
 
-export const RunData = Schema.Struct({ ...Run.fields, budgetOverrides: Schema.optional(BudgetOverridesData) }).pipe(
+export const RunData = Schema.Struct({
+  ...Run.fields,
+  budgetOverrides: Schema.optional(BudgetOverridesData),
+  codexSessionUsage: Schema.optional(CodexSessionUsageData),
+}).pipe(
   Schema.encodeKeys({
     cachedTokens: 'cached_tokens',
     workerGroup: 'worker_group',
@@ -45,6 +61,10 @@ export const RunData = Schema.Struct({ ...Run.fields, budgetOverrides: Schema.op
     commitSha: 'commit_sha',
     refinementCommentId: 'refinement_comment_id',
     predecessorId: 'predecessor_id',
+    threadCommentId: 'thread_comment_id',
+    codexSessionId: 'codex_session_id',
+    codexSessionUnresolved: 'codex_session_unresolved',
+    codexSessionUsage: 'codex_session_usage',
     budgetOverrides: 'budget_overrides',
     activeMillis: 'active_millis',
     waitSequence: 'wait_sequence',
@@ -64,9 +84,15 @@ export const AssignmentData = Schema.Struct({
   }),
 )
 
-const ProgressCommentData = ProgressComment.pipe(Schema.encodeKeys({ commentId: 'comment_id' }))
+const ProgressCommentData = ProgressComment.pipe(
+  Schema.encodeKeys({ commentId: 'comment_id', publicationId: 'publication_id' }),
+)
 
 export const JournalData = Schema.Struct({
+  sessionUsage: Schema.optional(CodexSessionUsageData),
+  publicationId: Journal.fields.publicationId,
+  threadBody: Journal.fields.threadBody,
+  threadPublished: Journal.fields.threadPublished,
   progressComments: Schema.optional(Schema.Array(ProgressCommentData)),
   assignment: AssignmentData,
   state: Journal.fields.state,
@@ -86,5 +112,9 @@ export const JournalData = Schema.Struct({
     elapsedMillis: 'elapsed_millis',
     stepResult: 'step_result',
     progressComments: 'progress_comments',
+    publicationId: 'publication_id',
+    sessionUsage: 'session_usage',
+    threadBody: 'thread_body',
+    threadPublished: 'thread_published',
   }),
 )

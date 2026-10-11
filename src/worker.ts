@@ -45,15 +45,33 @@ const pollRun = Effect.fn('Worker.pollRun')(function* (run: Run) {
     const command = yield* controls(run.id)
     let answer = command.resume_answer
     let responseCommentId: CommentId | undefined
+    let newThreadId: CommentId | undefined
     if (!command.resume_requested && run.status === 'blocked' && run.predecessorId !== null) {
-      const snapshot = yield* linear.read(run.issueId)
+      const snapshot = yield* linear.read(run.issueId, [
+        run.predecessorId,
+        ...(run.threadCommentId ? [run.threadCommentId] : []),
+      ])
       const publication = snapshot.comments.find((comment) => comment.id === run.predecessorId)
       if (publication) {
-        const replies = yield* linear.replies({ issueId: run.issueId, commentId: publication.id })
-        const response = humanAnswer({ replies, publication })
+        const root =
+          run.threadCommentId ?? (yield* linear.threadParent({ issueId: run.issueId, commentId: publication.id }))
+        const replies = yield* linear.replies({ issueId: run.issueId, commentId: root })
+        const publicationIds = yield* store.publicationIds(run.id)
+        const response = humanAnswer({ replies, publication, publicationIds })
         if (response) {
           answer = response.body.trim()
           responseCommentId = response.id
+        } else {
+          // A new human root starts a fresh conversation, never a continuation of another role's session.
+          for (const candidate of snapshot.comments) {
+            if (!humanAnswer({ replies: [candidate], publication, publicationIds })) continue
+            const parent = yield* linear.threadParent({ issueId: run.issueId, commentId: candidate.id })
+            if (parent !== candidate.id || parent === root) continue
+            answer = candidate.body.trim()
+            responseCommentId = candidate.id
+            newThreadId = candidate.id
+            break
+          }
         }
       }
     }
@@ -70,6 +88,10 @@ const pollRun = Effect.fn('Worker.pollRun')(function* (run: Run) {
         responseCommentId,
         question: null,
         phase: scopeChanged ? 'refinement' : run.phase,
+        threadCommentId: newThreadId ?? (scopeChanged ? undefined : run.threadCommentId),
+        codexSessionId: scopeChanged || newThreadId !== undefined ? undefined : run.codexSessionId,
+        codexSessionUsage: scopeChanged || newThreadId !== undefined ? undefined : run.codexSessionUsage,
+        codexSessionUnresolved: scopeChanged || newThreadId !== undefined ? undefined : run.codexSessionUnresolved,
         refinementCommentId: scopeChanged ? null : run.refinementCommentId,
         note: `${run.note}\n\nHuman response: ${answer ?? 'Explicit CLI resume; reconcile prior work before continuing.'}`,
       }

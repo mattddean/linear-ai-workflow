@@ -1,7 +1,7 @@
 import { and, asc, eq, sql } from 'drizzle-orm'
 import { Context, Effect, Layer, Schema } from 'effect'
 
-import type { RunId, Journal, Run } from './domain'
+import type { RunId, Journal, Run, CommentId } from './domain'
 
 import { RunData, JournalData } from './boundary-schemas'
 import { Db } from './db/live'
@@ -13,6 +13,7 @@ import { AppError, error } from './domain'
 export class Store extends Context.Service<
   Store,
   {
+    readonly publicationIds: (id: RunId) => Effect.Effect<readonly CommentId[], AppError>
     readonly cancel: (id: RunId) => Effect.Effect<void, AppError>
     readonly enroll: (run: Run) => Effect.Effect<boolean, AppError>
     readonly create: (run: Run) => Effect.Effect<void, AppError>
@@ -79,6 +80,21 @@ export class Store extends Context.Service<
           .pipe(Effect.asVoid, Effect.mapError(storageError)),
       )
       return Store.of({
+        publicationIds: Effect.fn('Store.publicationIds')(function* (id) {
+          const rows = yield* db
+            .select({ data: workflow_assignments.data })
+            .from(workflow_assignments)
+            .where(eq(workflow_assignments.run_id, id))
+          const journals = yield* Schema.decodeUnknownEffect(Schema.Array(JournalData))(rows.map((row) => row.data))
+          return journals.flatMap((journal) =>
+            [
+              journal.assignment.run.threadCommentId,
+              journal.publicationId,
+              journal.commentId,
+              ...(journal.progressComments ?? []).flatMap((entry) => [entry.publicationId, entry.commentId]),
+            ].flatMap((value) => (value == null ? [] : [value])),
+          )
+        }, Effect.mapError(storageError)),
         cancel: Effect.fn('Store.cancel')((id) =>
           db
             .update(workflow_runs)

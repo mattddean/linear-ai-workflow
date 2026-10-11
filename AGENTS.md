@@ -111,7 +111,7 @@ Append reports and refinements instead of editing history. Keep enough evidence 
 
 ## Codex and Git
 
-Start a fresh Codex session for each role assignment. Pin `gpt-6-astra`; do not silently fall back. Retain the configured authentication and permission enforcement. Capture process identity, exit status, final structured result, and artifact references.
+Map each role conversation thread to one Codex session. Resume that session for correlated human replies within the thread; start a new thread and session for each role/phase handoff or new human conversation. Pin `gpt-6-astra`; do not silently fall back. Retain the configured authentication and permission enforcement. Capture process identity, exit status, final structured result, and artifact references.
 
 Reconcile interrupted processes and workspace changes before retrying an assignment. Prevent an older process from writing concurrently with its replacement. Cancellation must stop or account for the child process, not merely mark its database row paused.
 

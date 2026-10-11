@@ -1,13 +1,13 @@
 import { Effect, Layer, Redacted } from 'effect'
 
 import type { AgentProgress } from '../agent-progress'
-import type { Assignment, Comment, Journal, Run, Result, Snapshot } from '../domain'
+import type { Assignment, Comment, Journal, Run, Result, Snapshot, CommentId } from '../domain'
 
 import { Agent } from '../agent'
 import { Settings } from '../config'
 import { Coordinator } from '../coordinator'
 import {
-  CommentId,
+  CodexSessionId,
   IssueId,
   IssueKey,
   Path,
@@ -101,11 +101,13 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     run: initial,
     journals: new Map<number, Journal>(),
     calls: 0,
+    assignments: new Array<Assignment>(),
     cachedTokensPerAssignment: 0,
     posts: 0,
     pause: false,
     canceled: false,
     ambiguous: false,
+    ambiguousRoot: false,
     ambiguousAcknowledgement: false,
     ambiguousProgress: false,
     progressMessages: new Array<AgentProgress>(),
@@ -122,21 +124,25 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
       comments: [],
     } satisfies Snapshot,
   }
+  const roots: Comment[] = []
   const comments: Comment[] = []
   const progressComments: Comment[] = []
+  const publications: { parentId?: CommentId | undefined; id: CommentId }[] = []
   const acknowledgements: { issueId: IssueId; commentId?: CommentId | undefined }[] = []
   const read = Effect.fn('Test.Linear.read')(() =>
     Effect.sync(
       (): Snapshot =>
         structuredClone({
           ...state.snapshot,
-          comments: [...comments, ...progressComments],
+          comments: [...roots, ...comments, ...progressComments],
         }),
     ),
   )
   const linear = Linear.of({
     isCanceled: () => Effect.sync(() => state.canceled),
     discover: Effect.succeed([state.snapshot.issue]),
+    threadParent: ({ commentId }) =>
+      Effect.sync(() => publications.find((item) => item.id === commentId)?.parentId ?? commentId),
     replies: () => Effect.succeed([]),
     read,
     acknowledge: Effect.fn('Test.Linear.acknowledge')((input) =>
@@ -153,19 +159,27 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     ),
     post: Effect.fn('Test.Linear.post')((input) =>
       Effect.suspend(() => {
-        const existing = [...comments, ...progressComments].find((comment) =>
-          comment.body.startsWith(`${input.eventMarker}\n`),
+        const existing = [...roots, ...comments, ...progressComments].find(
+          (comment) => comment.id === input.publicationId,
         )
         if (existing) return Effect.succeed(existing)
-        const progress = input.eventMarker.includes('/progress/')
-        if (!progress) state.posts += 1
+        const progress = input.body.startsWith('Developer:')
+        const root = input.body.includes('<!-- linear-ai-workflow:')
+        if (!progress && !root) state.posts += 1
         const comment: Comment = {
-          id: CommentId.make(crypto.randomUUID()),
+          id: input.publicationId,
           body: input.body,
           createdAt: new Date().toISOString(),
           user: { id: userId },
         }
-        if (progress) {
+        publications.push({ id: comment.id, parentId: input.parentId })
+        if (root) {
+          roots.push(comment)
+          if (state.ambiguousRoot) {
+            state.ambiguousRoot = false
+            return Effect.fail(error('transport', 'Timed out after thread publication'))
+          }
+        } else if (progress) {
           if (
             state.journals.size > 0 &&
             ![...state.journals.values()].some((journal) =>
@@ -179,7 +193,7 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
             return Effect.fail(error('transport', 'Timed out after progress publication'))
           }
         } else comments.push(comment)
-        if (!progress && state.ambiguous) {
+        if (!progress && !root && state.ambiguous) {
           state.ambiguous = false
           return Effect.fail(error('transport', 'Timed out after publication'))
         }
@@ -188,6 +202,7 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     ),
   })
   const store = Store.of({
+    publicationIds: () => Effect.sync(() => publications.map((item) => item.id)),
     cancel: () =>
       Effect.sync(() => {
         if (state.run.status !== 'canceled') state.run = { ...state.run, status: 'canceling' }
@@ -222,12 +237,22 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     acknowledge: () => Effect.void,
   })
   const agent = Agent.of({
-    execute: Effect.fn('Test.Agent.execute')(function* (assignment: Assignment, onProgress) {
+    execute: Effect.fn('Test.Agent.execute')(function* (assignment: Assignment, onProgress, onSession) {
+      if (onSession) yield* onSession(assignment.run.codexSessionId ?? CodexSessionId.make(crypto.randomUUID()))
+      state.assignments.push(assignment)
       state.calls += 1
       for (const progress of state.progressMessages) {
         if (onProgress) yield* onProgress(progress)
       }
-      return { result: state.agentResult(assignment.run), tokens: 100, cachedTokens: state.cachedTokensPerAssignment }
+      return {
+        result: state.agentResult(assignment.run),
+        tokens: 100,
+        cachedTokens: state.cachedTokensPerAssignment,
+        sessionUsage: {
+          tokens: (assignment.run.codexSessionUsage?.tokens ?? 0) + 100,
+          cachedTokens: (assignment.run.codexSessionUsage?.cachedTokens ?? 0) + state.cachedTokensPerAssignment,
+        },
+      }
     }),
   })
   const workspace = Workspace.of({
@@ -242,7 +267,20 @@ export function fixture(initial = makeRun(), configured: Settings['Service'] = s
     Layer.succeed(Linear, linear),
   )
   const layer = Coordinator.layer.pipe(Layer.provide(dependencies), Layer.provide(Layer.succeed(Store, store)))
-  return { state, comments, progressComments, acknowledgements, store, linear, agent, workspace, dependencies, layer }
+  return {
+    state,
+    comments,
+    roots,
+    progressComments,
+    publications,
+    acknowledgements,
+    store,
+    linear,
+    agent,
+    workspace,
+    dependencies,
+    layer,
+  }
 }
 
 // Capture this test's fakes while leaving the real Store supplied by the calling runtime or scope.

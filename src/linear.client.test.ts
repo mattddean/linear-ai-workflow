@@ -72,7 +72,7 @@ test('Linear adapter paginates comments and reconciles a published event without
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const linear = yield* Linear
-      return yield* linear.post({ issueId: f.state.run.issueId, body: second.body, eventMarker: '<!-- event -->' })
+      return yield* linear.post({ issueId: f.state.run.issueId, body: second.body, publicationId: second.id })
     }).pipe(Effect.provide(layer)),
   )
   expect(result.id).toBe(second.id)
@@ -125,7 +125,12 @@ test('comment creation preserves native Linear request and response properties',
       if (typeof init?.body !== 'string') throw new Error('Expected JSON request')
       const request = Schema.decodeUnknownSync(requestSchema)(init.body)
       if (request.query.includes('mutation Comment(')) {
-        expect(request.variables).toEqual({ issueId: f.state.run.issueId, body: comment.body, parentId: null })
+        expect(request.variables).toEqual({
+          id: comment.id,
+          issueId: f.state.run.issueId,
+          body: comment.body,
+          parentId: null,
+        })
         expect(request.query).toContain('commentCreate(input:')
         expect(request.query).not.toContain('comment_create')
         expect(request.query).toContain('issueId: $issueId')
@@ -154,7 +159,7 @@ test('comment creation preserves native Linear request and response properties',
   )
   const result = await Effect.runPromise(
     Effect.flatMap(Linear, (linear) =>
-      linear.post({ issueId: f.state.run.issueId, body: comment.body, eventMarker: '<!-- new-event -->' }),
+      linear.post({ issueId: f.state.run.issueId, body: comment.body, publicationId: comment.id }),
     ).pipe(Effect.provide(layer)),
   )
   expect(result).toEqual(comment)
@@ -342,7 +347,7 @@ test.each([false, true])(
         const input = {
           issueId: f.state.run.issueId,
           body: comment.body,
-          eventMarker: '<!-- reply-event -->',
+          publicationId: comment.id,
           parentId: targetId,
         }
         expect(yield* linear.post(input)).toEqual(comment)
@@ -565,4 +570,80 @@ test('cancellation refuses an issue outside the configured team', async () => {
     ),
   )
   expect(result._tag).toBe('Failure')
+})
+
+test('discussion includes referenced handoffs and all root replies omitted from issue comments', async () => {
+  const f = fixture()
+  const root = {
+    id: CommentId.make(crypto.randomUUID()),
+    body: 'PM refinement',
+    createdAt: '2026-01-01T00:00:00Z',
+    user: { id: userId },
+  }
+  const handoff = {
+    ...root,
+    id: CommentId.make(crypto.randomUUID()),
+    body: 'Developer handoff',
+    createdAt: '2026-01-02T00:00:00Z',
+  }
+  const answer = {
+    ...root,
+    id: CommentId.make(crypto.randomUUID()),
+    body: 'Human feedback',
+    createdAt: '2026-01-03T00:00:00Z',
+  }
+  let pages = 0
+  const layer = testLayer(
+    fetchImplementation(async (_url, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected JSON request')
+      const request = Schema.decodeUnknownSync(
+        Schema.fromJsonString(
+          Schema.Struct({
+            query: Schema.String,
+            variables: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
+          }),
+        ),
+      )(init.body)
+      if (request.query.includes('query Issue(')) return Response.json({ data: { issue: f.state.snapshot.issue } })
+      if (request.query.includes('query ReferencedComment(')) {
+        const comment = request.variables.id === root.id ? root : handoff
+        return Response.json({
+          data: {
+            comment: {
+              ...comment,
+              parent: comment.id === root.id ? null : { id: root.id },
+              issue: { id: f.state.run.issueId, team: { id: settings.teamId } },
+            },
+          },
+        })
+      }
+      if (request.query.includes('query Replies(')) {
+        expect(request.variables.id).toBe(root.id)
+        pages++
+        const next = request.variables.after === 'next'
+        return Response.json({
+          data: {
+            comment: {
+              id: root.id,
+              issue: { id: f.state.run.issueId, team: { id: settings.teamId } },
+              children: {
+                nodes: [next ? answer : handoff],
+                pageInfo: { hasNextPage: !next, endCursor: next ? null : 'next' },
+              },
+            },
+          },
+        })
+      }
+      return Response.json({
+        data: { issue: { comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } },
+      })
+    }),
+  )
+  const snapshot = await Effect.runPromise(
+    Effect.flatMap(Linear, (linear) => linear.read(f.state.run.issueId, [root.id, handoff.id, root.id])).pipe(
+      Effect.provide(layer),
+    ),
+  )
+  expect(snapshot.comments).toEqual([root, handoff, answer])
+  expect(pages).toBe(2)
 })

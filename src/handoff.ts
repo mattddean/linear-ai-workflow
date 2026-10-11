@@ -60,17 +60,57 @@ export function blocked(run: Run, message: string): Result {
   }
 }
 
-export function commentBody(run: Run, result: Result): string {
-  return `${marker(run)}\nRun: ${run.id}\nRole: ${roleFor(run.phase)}\nPhase: ${run.phase}\nOutcome: ${result.outcome}\nResponds-To: ${run.predecessorId ?? 'none'}\nSpec: ${result.refinementCommentId ?? 'self/none'}\nCommit: ${result.commitSha ?? 'none'}\nNext: ${result.nextRole ?? 'none'}/${result.nextPhase ?? 'none'}\n\n${result.report}${result.question === null ? '' : `\n\n## Human response required\n\nReply directly to this comment with your answer. Start your answer with \`SCOPE:\` if it changes the requirements.\n\n${result.question}`}`
+export function threadBody(run: Run): string {
+  return `**${roleFor(run.phase)} · ${run.phase}**
+
++++ Workflow details
+
+${marker(run)}
+Run: ${run.id}
+Responds-To: ${run.predecessorId ?? 'none'}
+
++++`
 }
 
-export function humanAnswer(input: { replies: readonly Comment[]; publication: Comment }): Comment | undefined {
+export function commentBody(run: Run, result: Result): string {
+  return `**${roleFor(run.phase)} · ${run.phase} · ${result.outcome}**
+
+${result.report}${
+    result.question === null
+      ? ''
+      : `
+
+## Human response required
+
+Reply in this thread with your answer. Start your answer with \`SCOPE:\` if it changes the requirements.
+
+${result.question}`
+  }
+
++++ Workflow details
+
+Outcome: ${result.outcome}
+Session: ${run.codexSessionId ?? 'not started'}
+Responds-To: ${run.predecessorId ?? 'none'}
+Spec: ${result.refinementCommentId ?? 'self/none'}
+Commit: ${result.commitSha ?? 'none'}
+Next: ${result.nextRole ?? 'none'}/${result.nextPhase ?? 'none'}
+
++++`
+}
+
+export function humanAnswer(input: {
+  replies: readonly Comment[]
+  publication: Comment
+  publicationIds?: readonly CommentId[]
+}): Comment | undefined {
   const { replies, publication } = input
   return replies.find(
     (comment) =>
       comment.id !== publication.id &&
+      !input.publicationIds?.includes(comment.id) &&
       comment.user !== null &&
-      !comment.body.startsWith('<!-- linear-ai-workflow:') &&
+      !comment.body.includes('<!-- linear-ai-workflow:') &&
       Date.parse(comment.createdAt) >= Date.parse(publication.createdAt) &&
       comment.body.trim().length > 0,
   )

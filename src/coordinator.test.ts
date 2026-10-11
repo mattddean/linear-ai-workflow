@@ -104,7 +104,7 @@ test('blocked agent asks for a direct reply and accepts its full text without an
   expect(f.state.run.phase).toBe('refinement')
   const publication = f.comments[0]
   if (!publication) throw new Error('Expected publication')
-  expect(publication.body).toContain('Reply directly to this comment')
+  expect(publication.body).toContain('Reply in this thread')
   expect(publication.body).not.toContain('Q-')
   const answer = {
     id: CommentId.make(crypto.randomUUID()),
@@ -343,4 +343,132 @@ test('persisted cancellation interrupts active work and suppresses its handoff',
   expect(stopped).toBe(true)
   expect(f.state.run.status).toBe('canceling')
   expect(f.state.posts).toBe(0)
+})
+
+test('handoffs create new threads while reports and Developer progress stay under their role root', async () => {
+  const f = fixture()
+  for (let sequence = 0; sequence < 4; sequence++) await execute(f)
+  expect(f.roots).toHaveLength(4)
+  expect(new Set(f.roots.map((root) => root.id)).size).toBe(4)
+  for (const [sequence, journal] of f.state.journals) {
+    const root = f.roots[sequence]
+    expect(journal.assignment.run.threadCommentId).toBe(root?.id)
+    expect(f.publications.find((item) => item.id === journal.commentId)?.parentId).toBe(root?.id)
+    for (const progress of journal.progressComments ?? [])
+      expect(f.publications.find((item) => item.id === progress.commentId)?.parentId).toBe(root?.id)
+    expect(root?.body).toContain('+++ Workflow details')
+    expect(root?.body).toContain('<!-- linear-ai-workflow:')
+  }
+  expect(f.comments.every((comment) => !comment.body.includes('linear-ai-workflow:'))).toBe(true)
+  expect(f.progressComments.every((comment) => !comment.body.includes('linear-ai-workflow:'))).toBe(true)
+})
+
+test('ambiguous handoffs reuse their recorded thread, publication ID, and session without rerunning', async () => {
+  const f = fixture()
+  await execute(f)
+  f.state.ambiguous = true
+  const failure = await execute(f).then(
+    () => '',
+    (cause: unknown) => String(cause),
+  )
+  expect(failure).toContain('Timed out after publication')
+  const root = f.state.run.threadCommentId
+  const session = f.state.run.codexSessionId
+  const journal = f.state.journals.get(1)
+  expect(root).toBe(f.roots[1]?.id)
+  expect(session).toBeDefined()
+  const calls = f.state.calls
+  expect(await execute(f)).toBe('continue')
+  expect(f.state.calls).toBe(calls)
+  expect(f.roots).toHaveLength(2)
+  expect(f.state.run.codexSessionId).toBeUndefined()
+  expect(f.comments.at(-1)?.id).toBe(journal?.publicationId)
+})
+
+test('a human continuation preserves its role thread and Codex session, then clears them on handoff', async () => {
+  const f = fixture()
+  f.state.agentResult = (run) => blocked(run, 'Connect the device')
+  expect(await execute(f)).toBe('wait')
+  const threadCommentId = f.state.run.threadCommentId
+  const codexSessionId = f.state.run.codexSessionId
+  expect(codexSessionId).toBeDefined()
+  f.state.run = {
+    ...f.state.run,
+    status: 'queued',
+    answer: 'Connected',
+    responseCommentId: CommentId.make(crypto.randomUUID()),
+  }
+  f.state.agentResult = (run) => {
+    expect(run.threadCommentId).toBe(threadCommentId)
+    expect(run.codexSessionId).toBe(codexSessionId)
+    return ready(run)
+  }
+  expect(await execute(f)).toBe('continue')
+  expect(f.roots).toHaveLength(1)
+  expect(f.state.run.threadCommentId).toBeUndefined()
+  expect(f.state.run.codexSessionId).toBeUndefined()
+})
+
+test('untagged coordinator publications cannot be interpreted as human answers', () => {
+  const publication = {
+    id: CommentId.make(crypto.randomUUID()),
+    body: 'Question',
+    createdAt: '2026-01-01T00:00:00Z',
+    user: { id: userId },
+  }
+  const progress = { ...publication, id: CommentId.make(crypto.randomUUID()), body: 'Developer: Checking the build' }
+  expect(humanAnswer({ publication, replies: [progress], publicationIds: [progress.id] })).toBeUndefined()
+})
+
+test('an unresolved session blocks continuation instead of silently replacing the session', async () => {
+  const f = fixture({
+    ...makeRun(),
+    threadCommentId: CommentId.make(crypto.randomUUID()),
+    codexSessionUnresolved: true,
+  })
+  expect(await execute(f)).toBe('wait')
+  expect(f.state.calls).toBe(0)
+  expect(f.state.run.question).toContain('cannot silently start')
+})
+
+test('ambiguous thread creation is reconciled before the session starts', async () => {
+  const f = fixture()
+  f.state.ambiguousRoot = true
+  const failure = await execute(f).then(
+    () => '',
+    (cause: unknown) => String(cause),
+  )
+  expect(failure).toContain('Timed out after thread publication')
+  expect(f.state.calls).toBe(0)
+  expect(f.state.journals.get(0)?.threadPublished).toBe(false)
+  expect(await execute(f)).toBe('continue')
+  expect(f.roots).toHaveLength(1)
+  expect(f.state.calls).toBe(1)
+})
+
+test('questions remain outside collapsed workflow metadata', async () => {
+  const f = fixture()
+  f.state.agentResult = (run) => blocked(run, 'Connect the device')
+  await execute(f)
+  const body = f.comments[0]?.body ?? ''
+  expect(body.indexOf('Connect the device')).toBeLessThan(body.indexOf('+++ Workflow details'))
+  expect(body).toContain('Session: ')
+  expect(body).not.toContain('linear-ai-workflow:')
+})
+
+test('a confirmed thread resumes startup after a crash before the agent was dispatched', async () => {
+  const f = fixture()
+  f.state.ambiguousRoot = true
+  await execute(f).catch(() => undefined)
+  const journal = f.state.journals.get(0)
+  if (!journal) throw new Error('Expected thread intent')
+  f.state.journals.set(0, {
+    ...journal,
+    threadPublished: true,
+    state: 'started',
+    assignment: { ...journal.assignment, snapshot: { ...f.state.snapshot, comments: f.roots } },
+  })
+  expect(await execute(f)).toBe('continue')
+  expect(f.state.calls).toBe(1)
+  expect(f.roots).toHaveLength(1)
 })

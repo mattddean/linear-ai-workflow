@@ -22,21 +22,25 @@ import { TestDatabaseLive } from '../test/db'
 import { fixture, makeRun, ready, userId, settings } from '../test/fixtures'
 import { TicketWorkflow, TicketWorkflowLive } from '../ticket.workflow'
 import { pollRuns } from '../worker'
-import { clientEngineLayer, ensureWorker, workerEngineLayer, workerGroups } from './workflow-engine'
+import { clientEngineLayer, ensureWorker, workerEngineLayer } from './workflow-engine'
 
 // Verifies worker-group routing and durable workflow recovery against a disposable Postgres database.
 
-test.each([...workerGroups])(
-  'cluster client routes %s workflow; durable wait survives worker restart',
-  async (group) => {
+test.each([
+  { group: 'default', newThread: false },
+  { group: 'local', newThread: false },
+  { group: 'local', newThread: true },
+] as const)(
+  'cluster workflow %j preserves conversation identity across worker restart',
+  async ({ group, newThread }) => {
     const db = TestDatabaseLive
     const f = fixture({ ...makeRun(), workerGroup: group })
     let shouldBlock = true
     const answer = 'Ready\nThe device is connected.'
     const replyThreads = new Map<CommentId, readonly Comment[]>()
     f.state.agentResult = (run) => {
-      if (!shouldBlock && run.sequence === 1) expect(run.answer).toBe(group === 'local' ? answer : 'Ready')
-      return shouldBlock ? blocked(run, 'Confirm test environment') : ready(run)
+      if (!shouldBlock && run.sequence === 2) expect(run.answer).toBe(group === 'local' ? answer : 'Ready')
+      return shouldBlock && run.sequence === 1 ? blocked(run, 'Confirm test environment') : ready(run)
     }
     const linear = Linear.of({
       ...f.linear,
@@ -75,7 +79,7 @@ test.each([...workerGroups])(
           if (run.status === 'blocked') break
           yield* Effect.sleep('100 millis')
         }
-        expect(f.state.calls).toBe(1)
+        expect(f.state.calls).toBe(2)
         yield* Scope.close(scope1, Exit.void)
         shouldBlock = false
         const waiting = yield* get
@@ -87,11 +91,16 @@ test.each([...workerGroups])(
             createdAt: new Date().toISOString(),
             user: { id: userId },
           }
-          // A standalone ticket comment cannot wake the blocked workflow.
-          f.comments.push(reply)
+          if (waiting.threadCommentId === undefined) throw new Error('Expected persisted thread root')
+          const earlierReply = { ...reply, id: CommentId.make(crypto.randomUUID()), createdAt: '2000-01-01T00:00:00Z' }
+          replyThreads.set(waiting.threadCommentId, [earlierReply])
           yield* pollRuns(group).pipe(Effect.provide(clientContext), Effect.provide(storeContext))
           expect((yield* get).status).toBe('blocked')
-          replyThreads.set(waiting.predecessorId, [reply])
+          expect(waiting.threadCommentId).toBe(f.roots[1]?.id)
+          expect(waiting.threadCommentId).not.toBe(waiting.predecessorId)
+          if (waiting.threadCommentId === undefined) throw new Error('Expected persisted thread root')
+          f.comments.push(reply)
+          if (!newThread) replyThreads.set(waiting.threadCommentId, [earlierReply, reply])
         } else {
           yield* Effect.flatMap(Store, (store) =>
             store.control({ id: waiting.id, command: 'resume', answer: 'Ready' }),
@@ -109,6 +118,11 @@ test.each([...workerGroups])(
         if (group === 'local')
           expect(f.acknowledgements[1]?.commentId).toBe(f.comments.find((comment) => comment.body === answer)?.id)
         expect(f.state.calls).toBe(5)
+        expect(f.state.assignments[2]?.run.codexSessionId).toBe(newThread ? undefined : waiting.codexSessionId)
+        expect(f.state.assignments[2]?.run.threadCommentId).toBe(
+          newThread ? f.comments.find((comment) => comment.body === answer)?.id : waiting.threadCommentId,
+        )
+        expect(f.state.assignments[3]?.run.codexSessionId).toBeUndefined()
         expect(f.state.posts).toBe(5)
         for (;;) {
           const result = yield* TicketWorkflow.poll(executionId).pipe(Effect.provide(clientContext))

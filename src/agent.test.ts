@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { Agent, stopCanceledAgent } from './agent'
 import { childEnvironment } from './child-environment'
 import { Settings } from './config'
-import { Path, RunId } from './domain'
+import { Path, RunId, CodexSessionId } from './domain'
 import { fixture, ready, settings } from './test/fixtures'
 import { budgetTokens, countTokenUsage } from './token-usage'
 
@@ -28,7 +28,7 @@ test('usage ignores non-usage events and malformed log lines', () => {
     countTokenUsage(
       'bad\n' + JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 20, output_tokens: 3 } }),
     ),
-  ).toEqual({ tokens: 23, cachedTokens: 0 })
+  ).toEqual({ tokens: 23, cachedTokens: 0, sessionUsage: { tokens: 23, cachedTokens: 0 } })
 })
 
 async function mockCodex(options: { hang: boolean; progress?: boolean }) {
@@ -39,7 +39,7 @@ async function mockCodex(options: { hang: boolean; progress?: boolean }) {
   const progressScript = options.progress
     ? `console.log(JSON.stringify({type:'item.completed',item:{id:'item_1',type:'agent_message',text:'Implementation complete; running checks.'}}));\nwhile (!(await Bun.file(${JSON.stringify(join(dir, 'progress-received'))}).exists())) await Bun.sleep(10);\n`
     : ''
-  const script = `#!${process.execPath}\nconst args = process.argv.slice(2);\nawait Bun.write(${JSON.stringify(join(dir, 'args.json'))}, JSON.stringify(args));\nawait Bun.write(${JSON.stringify(join(dir, 'input.md'))}, await Bun.stdin.text());\n${progressScript}${options.hang ? 'await new Promise(() => { setInterval(() => {}, 1000) });' : `await Bun.write(args[args.indexOf('--output-last-message') + 1], ${JSON.stringify(JSON.stringify(output))});\nconsole.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:20,output_tokens:3}}));`}\n`
+  const script = `#!${process.execPath}\nconst args = process.argv.slice(2);\nconsole.log(JSON.stringify({type:"thread.started", thread_id: args.includes("resume") ? args[args.indexOf("resume") + 3] : "00000000-0000-4000-8000-000000000099"}));\nawait Bun.write(${JSON.stringify(join(dir, 'args.json'))}, JSON.stringify(args));\nawait Bun.write(${JSON.stringify(join(dir, 'input.md'))}, await Bun.stdin.text());\n${progressScript}${options.hang ? 'await new Promise(() => { setInterval(() => {}, 1000) });' : `await Bun.write(args[args.indexOf('--output-last-message') + 1], ${JSON.stringify(JSON.stringify(output))});\nconsole.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:20,output_tokens:3}}));`}\n`
   await writeFile(join(dir, 'codex'), script)
   await chmod(join(dir, 'codex'), 0o755)
   const layer = Agent.layer.pipe(Layer.provide(Layer.succeed(Settings, { ...settings, artifactRoot: Path.make(dir) })))
@@ -131,19 +131,19 @@ test('interrupting an assignment terminates the local process and releases the l
   await rm(mock.dir, { recursive: true, force: true })
 }, 10000)
 
-test('budget counts uncached input plus output across completed turns, without adding reasoning twice', () => {
+test('budget uses the latest cumulative turn totals, without adding reasoning twice', () => {
   const log = [
     {
       type: 'turn.completed',
       usage: { input_tokens: 1000, cached_input_tokens: 900, output_tokens: 30, reasoning_output_tokens: 10 },
     },
-    { type: 'turn.completed', usage: { input_tokens: 1500, cached_input_tokens: 1400, output_tokens: 20 } },
+    { type: 'turn.completed', usage: { input_tokens: 1500, cached_input_tokens: 1400, output_tokens: 50 } },
   ]
     .map((event) => JSON.stringify(event))
     .join('\n')
   const usage = countTokenUsage(log)
-  expect(usage).toEqual({ tokens: 2550, cachedTokens: 2300 })
-  expect(budgetTokens(usage)).toBe(250)
+  expect(usage).toEqual({ tokens: 1550, cachedTokens: 1400, sessionUsage: { tokens: 1550, cachedTokens: 1400 } })
+  expect(budgetTokens(usage)).toBe(150)
 })
 
 for (const override of [undefined, 20]) {
@@ -233,3 +233,57 @@ test('ticket cancellation stops only its owned Codex process and preserves artif
     await rm(mock.dir, { recursive: true, force: true })
   }
 }, 10000)
+
+test('same-thread continuation resumes the exact recorded session with structured output and permission settings', async () => {
+  const mock = await mockCodex({ hang: false })
+  const prior = process.env.PATH
+  process.env.PATH = `${mock.dir}:${prior ?? ''}`
+  const sessionId = CodexSessionId.make('00000000-0000-4000-8000-000000000099')
+  const recorded: CodexSessionId[] = []
+  try {
+    await Effect.runPromise(
+      Effect.flatMap(Agent, (agent) =>
+        agent.execute(
+          {
+            ...mock.assignment,
+            run: {
+              ...mock.assignment.run,
+              codexSessionId: sessionId,
+              answer: 'Device connected',
+              codexSessionUsage: { tokens: 10, cachedTokens: 0 },
+            },
+          },
+          undefined,
+          (id) =>
+            Effect.sync(() => {
+              recorded.push(id)
+            }),
+        ),
+      ).pipe(Effect.provide(mock.layer)),
+    )
+    const args = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.String)))(
+      await readFile(join(mock.dir, 'args.json'), 'utf8'),
+    )
+    expect(args.slice(-5)).toEqual(['resume', '--model', 'gpt-6-astra', sessionId, '-'])
+    expect(args).toContain('--output-schema')
+    expect(args).toContain('workspace-write')
+    expect(recorded).toEqual([sessionId])
+    const input = await readFile(join(mock.dir, 'input.md'), 'utf8')
+    expect(input).toContain('Device connected')
+    expect(input).not.toContain('# Shared runtime instructions')
+  } finally {
+    process.env.PATH = prior
+    await rm(mock.dir, { recursive: true, force: true })
+  }
+})
+
+test('resumed session usage charges only the increase in lifetime totals', () => {
+  const log = JSON.stringify({
+    type: 'turn.completed',
+    usage: { input_tokens: 1500, cached_input_tokens: 1200, output_tokens: 100 },
+  })
+  const usage = countTokenUsage(log, { tokens: 1050, cachedTokens: 900 })
+  expect(usage).toEqual({ tokens: 550, cachedTokens: 300, sessionUsage: { tokens: 1600, cachedTokens: 1200 } })
+  expect(budgetTokens(usage)).toBe(250)
+  expect(countTokenUsage('bad', { tokens: 1050, cachedTokens: 900 })).toEqual({ tokens: 0, cachedTokens: 0 })
+})

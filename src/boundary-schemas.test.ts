@@ -3,7 +3,7 @@ import { Schema } from 'effect'
 import { deepStrictEqual, strictEqual } from 'node:assert'
 
 import { JournalData } from './boundary-schemas'
-import { CommentId, IssueId, RunId, TeamId, UserId } from './domain'
+import { CommentId, CodexSessionId, IssueId, RunId, TeamId, UserId } from './domain'
 
 // Protects legacy persisted JSON keys, optional fields, and identifier validation across schema upgrades.
 
@@ -134,4 +134,35 @@ test('progress comment outbox round-trips snake_case keys without requiring it o
   const decoded = Schema.decodeUnknownSync(JournalData)(payload)
   strictEqual(decoded.progressComments?.[0]?.commentId, legacyId)
   deepStrictEqual(Schema.encodeSync(JournalData)(decoded), payload)
+})
+
+test('workflow thread identity is persisted with a snake_case key', () => {
+  const journal = Schema.decodeUnknownSync(JournalData)(legacyJournal)
+  const threadCommentId = CommentId.make(crypto.randomUUID())
+  const encoded = Schema.encodeSync(JournalData)({
+    ...journal,
+    assignment: { ...journal.assignment, run: { ...journal.assignment.run, threadCommentId } },
+  })
+  expect(encoded.assignment.run.thread_comment_id).toBe(threadCommentId)
+  expect(encoded.assignment.run).not.toHaveProperty('threadCommentId')
+  expect(Schema.decodeUnknownSync(JournalData)(encoded).assignment.run.threadCommentId).toBe(threadCommentId)
+})
+
+test('session and publication identities round-trip as snake_case persisted fields', () => {
+  const journal = Schema.decodeUnknownSync(JournalData)(legacyJournal)
+  const codexSessionId = CodexSessionId.make(crypto.randomUUID())
+  const publicationId = CommentId.make(crypto.randomUUID())
+  const encoded = Schema.encodeSync(JournalData)({
+    ...journal,
+    publicationId,
+    threadBody: 'Root',
+    threadPublished: true,
+    assignment: { ...journal.assignment, run: { ...journal.assignment.run, codexSessionId } },
+    progressComments: [{ key: 'item', body: 'Update', publicationId, commentId: null }],
+  })
+  expect(encoded.assignment.run.codex_session_id).toBe(codexSessionId)
+  expect(encoded.publication_id).toBe(publicationId)
+  expect(encoded.thread_body).toBe('Root')
+  expect(encoded.progress_comments?.[0]?.publication_id).toBe(publicationId)
+  expect(Schema.decodeUnknownSync(JournalData)(encoded).assignment.run.codexSessionId).toBe(codexSessionId)
 })

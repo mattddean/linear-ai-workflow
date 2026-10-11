@@ -31,6 +31,13 @@ const ThreadResponse = Schema.Struct({
     issue: Schema.Struct({ id: Issue.fields.id, team: Issue.fields.team }),
   }),
 })
+const ReferencedCommentResponse = Schema.Struct({
+  comment: Schema.Struct({
+    ...Comment.fields,
+    parent: Schema.NullOr(Schema.Struct({ id: Comment.fields.id })),
+    issue: Schema.Struct({ id: Issue.fields.id, team: Issue.fields.team }),
+  }),
+})
 const CreatedResponse = Schema.Struct({
   commentCreate: Schema.Struct({ success: Schema.Boolean, comment: Schema.NullOr(Comment) }),
 })
@@ -68,7 +75,11 @@ export class Linear extends Context.Service<
   {
     readonly isCanceled: (id: IssueId) => Effect.Effect<boolean, AppError>
     readonly discover: Effect.Effect<readonly Issue[], AppError>
-    readonly read: (id: IssueId | typeof IssueKey.Type) => Effect.Effect<Snapshot, AppError>
+    readonly threadParent: (input: { issueId: IssueId; commentId: CommentId }) => Effect.Effect<CommentId, AppError>
+    readonly read: (
+      id: IssueId | typeof IssueKey.Type,
+      references?: readonly CommentId[],
+    ) => Effect.Effect<Snapshot, AppError>
     readonly replies: (input: { issueId: IssueId; commentId: CommentId }) => Effect.Effect<readonly Comment[], AppError>
     readonly acknowledge: (input: {
       issueId: IssueId
@@ -77,7 +88,7 @@ export class Linear extends Context.Service<
     readonly post: (input: {
       issueId: IssueId
       body: string
-      eventMarker: string
+      publicationId: CommentId
       parentId?: CommentId | undefined
     }) => Effect.Effect<Comment, AppError>
   }
@@ -128,7 +139,10 @@ export class Linear extends Context.Service<
         },
         Effect.mapError((failure) => error('linear', `Ticket discovery failed: ${failure.message}`)),
       )
-      const read = Effect.fn('Linear.read')(function* (id: IssueId | typeof IssueKey.Type) {
+      const read = Effect.fn('Linear.read')(function* (
+        id: IssueId | typeof IssueKey.Type,
+        references: readonly CommentId[] = [],
+      ) {
         const { issue } = yield* readRequest({
           schema: IssueResponse,
           query:
@@ -150,6 +164,24 @@ export class Linear extends Context.Service<
           const next = page.issue.comments.pageInfo.endCursor
           if (next === null || next === after) return yield* error('linear', 'Linear pagination did not advance')
           after = next
+        }
+        const roots = new Set<CommentId>()
+        for (const id of new Set(references)) {
+          const { comment } = yield* readRequest({
+            schema: ReferencedCommentResponse,
+            query: `query ReferencedComment($id: String!) { comment(id: $id) { ${commentFields} parent { id } issue { id team { id } } } }`,
+            variables: { id },
+          })
+          if (comment.id !== id || comment.issue.id !== issue.id || comment.issue.team.id !== settings.teamId)
+            return yield* error('linear', 'Referenced comment is outside the requested issue or configured team')
+          if (!comments.some((item) => item.id === comment.id))
+            comments.push({ id: comment.id, body: comment.body, createdAt: comment.createdAt, user: comment.user })
+          roots.add(comment.parent?.id ?? comment.id)
+        }
+        for (const root of roots) {
+          for (const comment of yield* replies({ issueId: issue.id, commentId: root })) {
+            if (!comments.some((item) => item.id === comment.id)) comments.push(comment)
+          }
         }
         return {
           issue,
@@ -246,19 +278,23 @@ export class Linear extends Context.Service<
           ? yield* threadParent({ issueId: input.issueId, commentId: input.parentId })
           : null
         const comments = parentId ? yield* replies({ issueId: input.issueId, commentId: parentId }) : snapshot.comments
-        const existing = comments.find((comment) => comment.body.startsWith(`${input.eventMarker}\n`))
+        const existing = comments.find((comment) => comment.id === input.publicationId)
+        if (!existing && snapshot.comments.some((comment) => comment.id === input.publicationId))
+          return yield* error('linear', 'Publication ID exists outside the expected comment thread')
         if (existing) {
           if (existing.body !== input.body)
-            return yield* error('linear', 'Event marker exists with a different body; human reconciliation required')
+            return yield* error('linear', 'Publication ID exists with a different body; human reconciliation required')
           return existing
         }
         const created = yield* request({
           schema: CreatedResponse,
-          query: `mutation Comment($issueId: String!, $body: String!, $parentId: String) { commentCreate(input: { issueId: $issueId, body: $body, parentId: $parentId }) { success comment { ${commentFields} } } }`,
-          variables: { issueId: input.issueId, body: input.body, parentId },
+          query: `mutation Comment($id: String!, $issueId: String!, $body: String!, $parentId: String) { commentCreate(input: { id: $id, issueId: $issueId, body: $body, parentId: $parentId }) { success comment { ${commentFields} } } }`,
+          variables: { id: input.publicationId, issueId: input.issueId, body: input.body, parentId },
         })
         if (!created.commentCreate.success || created.commentCreate.comment === null)
           return yield* error('linear', 'Linear did not confirm comment creation')
+        if (created.commentCreate.comment.id !== input.publicationId)
+          return yield* error('linear', 'Linear returned a different publication ID')
         // Fetch the persisted handoff rather than trusting an agent's draft or mutation echo.
         const confirmed = yield* read(input.issueId)
         const confirmedComments = parentId
@@ -270,6 +306,7 @@ export class Linear extends Context.Service<
         return comment
       })
       return Linear.of({
+        threadParent,
         isCanceled: Effect.fn('Linear.isCanceled')(function* (id) {
           const { issue } = yield* readRequest({
             schema: StateResponse,

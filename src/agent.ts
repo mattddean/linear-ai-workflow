@@ -4,9 +4,10 @@ import { mkdir, readFile, writeFile, rm, open } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
 import type { AgentProgress } from './agent-progress'
-import type { AppError, AgentOutput, Assignment, RunId } from './domain'
+import type { AppError, AgentOutput, Assignment, RunId, CodexSessionId } from './domain'
 
 import { agentProgress } from './agent-progress'
+import { agentSession } from './agent-session'
 import { childEnvironment } from './child-environment'
 import { Settings } from './config'
 import { Result, error } from './domain'
@@ -125,6 +126,7 @@ export class Agent extends Context.Service<
     readonly execute: (
       assignment: Assignment,
       onProgress?: (progress: AgentProgress) => Effect.Effect<void, AppError>,
+      onSession?: (sessionId: CodexSessionId) => Effect.Effect<void, AppError>,
     ) => Effect.Effect<AgentOutput, AppError>
   }
 >()('linear-ai-workflow/agent/Agent') {
@@ -133,7 +135,7 @@ export class Agent extends Context.Service<
     Effect.gen(function* () {
       const settings = yield* Settings
       return Agent.of({
-        execute: Effect.fn('Agent.execute')(function* (assignment, onProgress) {
+        execute: Effect.fn('Agent.execute')(function* (assignment, onProgress, onSession) {
           const role = roleFor(assignment.run.phase)
           const dir = assignment.artifactDir
           const lock = `${settings.artifactRoot}/agent.lock`
@@ -142,6 +144,21 @@ export class Agent extends Context.Service<
           yield* io(() => mkdir(dir, { recursive: true }))
           // A surviving lease blocks new processes even after the workflow engine has recovered.
           yield* io(() => mkdir(lock))
+          let recordedSessionId: CodexSessionId | undefined
+          const recordSession = Effect.fn('Agent.recordSession')(function* () {
+            const log = yield* Effect.tryPromise(() => readFile(`${dir}/events.jsonl`, 'utf8')).pipe(
+              Effect.orElseSucceed(() => ''),
+            )
+            const sessionId = agentSession(log)
+            if (sessionId === undefined || sessionId === recordedSessionId) return
+            if (assignment.run.codexSessionId !== undefined && sessionId !== assignment.run.codexSessionId)
+              return yield* error(
+                'blocked',
+                'Codex resumed a different session; reconcile its event log before continuing',
+              )
+            if (onSession) yield* onSession(sessionId)
+            recordedSessionId = sessionId
+          })
           let spawned = false
           return yield* Effect.gen(function* () {
             yield* io(() => writeFile(`${lock}/run-id`, assignment.run.id))
@@ -163,7 +180,10 @@ export class Agent extends Context.Service<
               `${assignment.run.repo}/.whey.jsonc`,
             ]
             const runtime = `## Whey runtime\n\nThe CLI is installed outside the target repository. Its command argument prefix is ${JSON.stringify(wheyCommand)}. Append inspect, start, or open and isolate ID ${assignment.run.id}. Use inspect to identify the isolate; start initializes its services and guarded migrations; open additionally opens desktop apps. To reopen a closed isolate, inspect it and run open with this same isolate ID; if its services were stopped, run start before open. Reuse the recorded workspace and preserve its changes; closed apps are not a reason to recreate or reset the isolate. Follow role permissions and target-repository prerequisites.\n`
-            const input = `${shared}\n\n${prompt}\n\n${runtime}\n## Coordinator assignment\n\n${JSON.stringify(assignment)}\n`
+            const input =
+              assignment.run.codexSessionId === undefined
+                ? `${shared}\n\n${prompt}\n\n${runtime}\n## Coordinator assignment\n\n${JSON.stringify(assignment)}\n`
+                : `Continue this same role and comment thread using the updated assignment below. Reconcile existing work and the human answer before continuing.\n\n${JSON.stringify(assignment)}\n`
             yield* io(() => writeFile(`${dir}/assignment.json`, JSON.stringify(assignment, null, 2)))
             const output = yield* Effect.acquireRelease(
               io(() => open(logPath, 'w')),
@@ -173,6 +193,8 @@ export class Agent extends Context.Service<
               io(() => open(`${dir}/stderr.log`, 'w')),
               (file) => io(() => file.close()).pipe(Effect.orDie),
             )
+            const sessionDir = `${settings.artifactRoot}/${assignment.run.id}/threads/${assignment.run.threadCommentId ?? assignment.run.sequence}`
+            yield* io(() => mkdir(sessionDir, { recursive: true }))
             const args = [
               'exec',
               '--model',
@@ -182,7 +204,7 @@ export class Agent extends Context.Service<
               '--sandbox',
               'workspace-write',
               '--cd',
-              role === 'developer' ? assignment.run.workspace : dir,
+              role === 'developer' ? assignment.run.workspace : sessionDir,
               '--add-dir',
               dir,
               '--skip-git-repo-check',
@@ -191,6 +213,9 @@ export class Agent extends Context.Service<
               schemaPath,
               '--output-last-message',
               resultPath,
+              ...(assignment.run.codexSessionId === undefined
+                ? []
+                : ['resume', '--model', 'gpt-6-astra', assignment.run.codexSessionId]),
               '-',
             ]
             const child = yield* Effect.acquireRelease(
@@ -232,17 +257,17 @@ export class Agent extends Context.Service<
             ).pipe(Effect.repeat(Schedule.spaced('30 seconds')), Effect.delay('30 seconds'), Effect.forkScoped)
             let progressLines = 0
             const publishProgress = Effect.fn('Agent.publishProgress')(function* () {
-              if (role !== 'developer' || onProgress === undefined) return
+              yield* recordSession()
               const lines = (yield* io(() => readFile(logPath, 'utf8'))).split('\n')
               // Only consume complete lines; Codex can be in the middle of writing the next event.
               while (progressLines < lines.length - 1) {
                 const progress = agentProgress(lines[progressLines] ?? '')
-                if (progress) yield* onProgress(progress)
+                if (progress && role === 'developer' && onProgress) yield* onProgress(progress)
                 progressLines += 1
               }
             })
             const progressFiber =
-              role === 'developer' && onProgress !== undefined
+              onSession !== undefined || (role === 'developer' && onProgress !== undefined)
                 ? yield* publishProgress().pipe(
                     Effect.catch((failure) => Effect.logWarning(`Progress update pending: ${failure.message}`)),
                     Effect.repeat(Schedule.spaced('1 second')),
@@ -286,14 +311,21 @@ export class Agent extends Context.Service<
                 'agent',
                 `Codex exited ${code}. Inspect ${dir}/stderr.log and reconcile the workspace before resuming.`,
               )
+            if (recordedSessionId === undefined)
+              return yield* error('blocked', 'Codex did not report a session ID; inspect the event log before resuming')
             const raw = yield* io(() => readFile(resultPath, 'utf8'))
             const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Result))(raw).pipe(
               Effect.mapError(() => error('invalid', `Invalid Codex structured result at ${resultPath}`)),
             )
             const log = yield* io(() => readFile(logPath, 'utf8'))
-            return { result, ...countTokenUsage(log) }
+            return { result, ...countTokenUsage(log, assignment.run.codexSessionUsage) }
           }).pipe(
             Effect.scoped,
+            Effect.ensuring(
+              recordSession().pipe(
+                Effect.catch((failure) => Effect.logError(`Session identity remains pending: ${failure.message}`)),
+              ),
+            ),
             Effect.ensuring(
               Effect.suspend(() =>
                 spawned

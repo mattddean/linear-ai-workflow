@@ -35,7 +35,7 @@ The worker adds a 👀 reaction to the issue when it picks up a ticket, and reac
 
 Developer progress is posted as short Linear comments while the assignment runs: isolate preparation, implementation milestones, checks, commits, and blockers. The initial isolate comment gives its absolute directory and the exact Whey command to open or reopen it; headless preparation does not imply that desktop apps or development servers are running. Only public Developer commentary is forwarded, never raw tool output or reasoning. Progress intent and confirmed comment IDs live in the assignment journal, so uncertain writes reconcile on retry and these recorded comments do not invalidate the refinement or dispatch another role.
 
-Each assignment uses a fresh local Codex session with `gpt-6-astra`. Agents communicate through persisted Linear comments; one agent's private conversation is never passed to another. The coordinator publishes an agent's report, confirms that Linear stored it, and fetches that comment before dispatching its recipient.
+Each role conversation thread maps to one local Codex session with `gpt-6-astra`. Correlated human replies continue that session with `codex exec resume` and its recorded session ID; role/phase handoffs start a fresh thread and session. Agents communicate through persisted Linear comments; one agent's private conversation is never passed to another. The coordinator publishes an agent's report, confirms that Linear stored it, and fetches that comment before dispatching its recipient.
 
 Approval means the local implementation satisfies the ticket. Pushing, merging, deploying, and changing Linear status are separate, explicitly authorized actions.
 
@@ -105,7 +105,7 @@ Canceling an enrolled ticket in Linear stops its local workflow. The coordinator
 
 Applying `ai-workflow` selects that ticket for local implementation commits and workflow comments. The worker takes queued work automatically as capacity becomes available. The label does not authorize pushing, merging, deployment, or Linear status changes. Removing the label before discovery prevents enrollment. Once a run is enrolled, use its pause control to stop further assignments; removing a label does not interrupt an agent mid-assignment.
 
-When a run needs your input, its comment explains the blocker. Use Linear’s Reply action on that comment and write your answer normally; no ID is required. Prefix the answer with `SCOPE:` when it changes the requirements. The coordinator records the response and resumes the waiting phase. Material scope changes return to PM refinement. Replies to older questions and standalone ticket comments provide context but do not resume the waiting run.
+When a run needs your input, its comment explains the blocker. Reply in the workflow’s existing Linear thread and write your answer normally; no ID is required. Prefix the answer with `SCOPE:` when it changes the requirements. The coordinator records the response and resumes the waiting phase. Material scope changes return to PM refinement. Replies posted before the current blocker do not resume the waiting run. A new human thread posted after the blocker starts a fresh session for the waiting phase; `SCOPE:` returns it to PM refinement.
 
 ## Operator controls
 
@@ -138,7 +138,7 @@ A resume can include `--answer "..."`, `--extra-minutes 30`, `--extra-tokens 100
 
 If a process exits before its assignment result was saved, the worker publishes a blocker rather than repeating code execution. Saved results resume publication reconciliation. A process lease under `ARTIFACT_ROOT/agent.lock` prevents a surviving Codex process from overlapping a replacement. Stop the identified process group before resuming. If a crash left an incomplete lease with no PID, inspect local Codex processes before manually removing that lease directory.
 
-Developer sessions use the ticket workspace as their writable root. PM and QA sessions use their assignment artifact directory as the writable root and inspect the target repository through its absolute path. Their prompts require reading the target repository's instructions; configure any required review tools in the shared Codex configuration. Changes to source detected after a review block the handoff.
+Developer sessions use the ticket workspace as their writable root. PM and QA sessions use a stable per-thread artifact directory as the writable root and inspect the target repository through its absolute path. Their prompts require reading the target repository's instructions; configure any required review tools in the shared Codex configuration. Changes to source detected after a review block the handoff.
 
 ```sh
 bun run test  # Complete suite; shared Testcontainers Postgres, Docker required
@@ -153,6 +153,8 @@ Each assignment loads [shared runtime instructions](./prompts/shared.md) and exa
 - [PM instructions](./prompts/pm.md) for refinement and final acceptance.
 - [Developer instructions](./prompts/developer.md) for implementation and fixes.
 - [QA instructions](./prompts/qa.md) for independent verification.
+
+Each role/phase conversation starts a new thread before its Codex session runs. Progress, reports, blockers, and human replies stay in that thread and use the same recorded Codex session. A confirmed handoff starts the recipient's new thread and session. Only the coordinator-created root carries a `linear-ai-workflow:...` tag, inside a collapsed **Workflow details** section. Reports keep outcomes, evidence, and human questions visible, with machine details collapsed using Linear's documented `+++` Markdown syntax. User-created roots remain untouched; their thread/session association is recorded in Postgres.
 
 These prompts define the agents' structured results and reports. The coordinator validates each result, adds trusted metadata, and publishes the report as a Linear comment before dispatching the next role.
 
@@ -197,7 +199,7 @@ Each handoff comment identifies its run, event, role, phase, outcome, predecesso
 
 Effect Workflow persists execution progress and waits. A recorded assignment and an exclusive execution lease prevent competing dispatches. External effects still require reconciliation: durability does not make a comment publication or a Codex process exactly-once.
 
-Before posting a comment, the coordinator persists its body and unique event ID. If the request times out, it searches the issue's comments for that event before retrying. A handoff advances only after publication is confirmed. Interrupted agent assignments are reconciled against process state, logs, and workspace changes before another session starts.
+Before posting a comment, the coordinator persists its body, event identity, and caller-supplied Linear comment UUID. If the request times out, it reconciles that UUID and body in the expected thread before retrying. Individual replies need no embedded tags. Coordinator-recorded publication IDs distinguish agent messages from human answers. Codex reports lifetime session token totals; the coordinator persists that baseline and charges only the increase on continuation, excluding cached input from its execution budget. A handoff advances only after publication is confirmed. Interrupted agent assignments are reconciled against process state, logs, and workspace changes before another session starts.
 
 QA and PM approval apply to one refinement and one exact commit. A new refinement invalidates downstream acceptance; new code requires QA again. Changes to issue requirements during an assignment are checked before its handoff is accepted.
 
